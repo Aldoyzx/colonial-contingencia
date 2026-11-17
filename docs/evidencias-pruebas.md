@@ -4,7 +4,7 @@ Los tres escenarios que exige la actividad están automatizados en
 `server/test/scenarios.test.js` y también se pueden reproducir a mano en la interfaz. Para
 el informe, ejecuta `npm test` dentro de `server/` y adjunta una captura de la salida.
 
-Resultado esperado: `# tests 16 · # pass 16 · # fail 0`.
+Resultado esperado: `# tests 25 · # pass 25 · # fail 0` (escenarios, reglas de negocio, HTTP, base de datos y regresiones de la revisión). Requiere la base `contingencia_test` (la crea `docker compose up -d` o `database/00_crear_base_de_datos.sql`).
 
 ## Escenario 1: incidente inicial
 

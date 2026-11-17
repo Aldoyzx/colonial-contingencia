@@ -82,4 +82,7 @@ BEGIN
     LEFT JOIN servicios s ON s.codigo = h.codigo;
 END $$;
 
+-- Los próximos incidentes continúan la numeración (INC-AAAA-0002 en adelante).
+SELECT setval('incidente_numero_seq', (SELECT max(id) FROM incidentes));
+
 COMMIT;

@@ -10,6 +10,7 @@ const INITIAL_FORM = {
   severidad: 'alta',
   responsableId: '',
   servicioIds: [],
+  esSimulacro: false,
 };
 
 function validate(form) {
@@ -50,6 +51,7 @@ export default function IncidentForm({ users, currentUser, onCreated }) {
         severidad: form.severidad,
         responsableId: Number(form.responsableId),
         servicioIds: form.servicioIds,
+        esSimulacro: form.esSimulacro,
       });
       onCreated(created.id);
     } catch (err) {
@@ -119,9 +121,18 @@ export default function IncidentForm({ users, currentUser, onCreated }) {
         {fieldErrors.servicioIds && <small className="field__error">{fieldErrors.servicioIds}</small>}
       </fieldset>
 
+      <label className="toggle">
+        <input type="checkbox" checked={form.esSimulacro}
+          onChange={(e) => setForm((f) => ({ ...f, esSimulacro: e.target.checked }))} />
+        <span>
+          <strong>Es un simulacro</strong>
+          <small className="muted"> — ejercicio para ensayar el plan; se identifica en todo el sistema.</small>
+        </span>
+      </label>
+
       <div className="form__actions">
         <button type="submit" className="btn btn--primary" disabled={submitting}>
-          {submitting ? 'Registrando…' : 'Registrar incidente'}
+          {submitting ? 'Registrando…' : form.esSimulacro ? 'Iniciar simulacro' : 'Registrar incidente'}
         </button>
       </div>
     </form>

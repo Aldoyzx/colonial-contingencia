@@ -230,3 +230,43 @@ button, input, select, textarea { font: inherit; }
   .action { grid-template-columns: 1fr; }
   .action__side { justify-items: start; }
 }
+
+/* ---------- revisión Actividad 2: simulacro, diálogo y plan */
+.badge--simulacro { background: #ece6fb; color: #5b3fb5; }
+.badge--decision { background: #fdf0cc; color: #8a5a00; }
+.alert--simulacro { background: #f3effd; color: #4a3396; border: 1px solid #d9cdf7; }
+.incident-mini__badges { display: inline-flex; gap: 4px; justify-self: start; }
+
+.toggle { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px dashed #c9bdf0; border-radius: 8px; background: #faf8ff; cursor: pointer; }
+.toggle input { margin-top: 3px; }
+
+.dialog { border: 0; border-radius: 12px; padding: 0; width: min(440px, calc(100vw - 32px)); box-shadow: 0 20px 50px rgba(16, 24, 40, 0.25); color: var(--text); }
+.dialog::backdrop { background: rgba(30, 51, 84, 0.45); }
+.dialog__body { display: grid; gap: 10px; padding: 20px; }
+.dialog__body textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; resize: vertical; }
+.dialog__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.plan { display: grid; gap: 16px; }
+.plan__stages { display: grid; gap: 12px; }
+.plan-stage { display: grid; grid-template-columns: 44px 1fr; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.plan-stage__order { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--navy); color: #fff; font-weight: 700; }
+.plan-stage--decision .plan-stage__order { background: var(--amber); color: var(--navy); }
+.plan-stage--retry .plan-stage__order { background: var(--bad); }
+.plan-stage__body { display: grid; gap: 10px; }
+.plan-stage__head { display: flex; align-items: center; gap: 8px; }
+.plan-decision { display: grid; gap: 8px; }
+.plan-decision__branches { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; }
+.plan-stage__meta { display: grid; grid-template-columns: 220px 1fr; gap: 12px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); }
+.plan-stage__meta dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 4px; }
+.plan-stage__meta dd { margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 12px; background: #eef1f5; color: var(--text); white-space: nowrap; }
+.chip--herramienta { background: var(--info-bg); color: var(--navy); }
+.chip--infraestructura { background: var(--ok-bg); color: #1f6640; }
+.chip--servicio_externo { background: var(--warn-bg); color: #8a5a00; }
+.chip--documento { background: #f1ecfb; color: #5b3fb5; }
+
+@media (max-width: 760px) {
+  .plan-stage__meta, .plan-decision__branches { grid-template-columns: 1fr; }
+}
+.alert--simulacro { justify-content: flex-start; gap: 6px; }

@@ -9,7 +9,7 @@ import {
   formatDate,
 } from '../constants.js';
 import { useAsync } from '../useAsync.js';
-import { Criticality, ErrorBanner, Loading, ServiceStateBadge, SeverityBadge } from './common.jsx';
+import { Criticality, ErrorBanner, Loading, NoteDialog, ServiceStateBadge, SeverityBadge, SimulacroBadge } from './common.jsx';
 
 const POLL_MS = 10_000;
 
@@ -21,14 +21,15 @@ const KPIS = [
 
 function ServiceCard({ service, user, onChanged, onError }) {
   const [busy, setBusy] = useState(false);
+  const [pendingState, setPendingState] = useState(null);
   const options = canChangeService(user, service) ? SERVICE_TRANSITIONS[service.estado] : [];
 
-  const change = async (estado) => {
-    if (!estado) return;
-    const nota = window.prompt(`Nota para el cambio a "${SERVICE_STATE_LABELS[estado]}" (opcional):`) ?? undefined;
+  const confirmChange = async (nota) => {
+    const estado = pendingState;
+    setPendingState(null);
     setBusy(true);
     try {
-      await api.changeServiceStatus(service.id, { estado, nota: nota?.trim() || undefined });
+      await api.changeServiceStatus(service.id, { estado, nota });
       await onChanged();
     } catch (err) {
       onError(err);
@@ -54,7 +55,7 @@ function ServiceCard({ service, user, onChanged, onError }) {
           className="service-card__action"
           value=""
           disabled={busy}
-          onChange={(e) => change(e.target.value)}
+          onChange={(e) => e.target.value && setPendingState(e.target.value)}
           aria-label={`Cambiar estado de ${service.nombre}`}
         >
           <option value="">Cambiar estado…</option>
@@ -62,6 +63,17 @@ function ServiceCard({ service, user, onChanged, onError }) {
             <option key={estado} value={estado}>{SERVICE_STATE_LABELS[estado]}</option>
           ))}
         </select>
+      )}
+      {pendingState && (
+      <NoteDialog
+        open
+        title={`${service.codigo} → ${SERVICE_STATE_LABELS[pendingState] ?? ''}`}
+        description={`${service.nombre}. La nota queda en la bitácora de auditoría.`}
+        required={pendingState === 'afectado'}
+        confirmLabel="Cambiar estado"
+        onConfirm={confirmChange}
+        onCancel={() => setPendingState(null)}
+      />
       )}
     </article>
   );
@@ -103,6 +115,12 @@ export default function Dashboard({ user, onOpenIncident }) {
       </div>
 
       <ErrorBanner error={error ?? actionError} onDismiss={() => setActionError(null)} />
+
+      {incidentesAbiertos.some((i) => i.es_simulacro) && (
+        <div className="alert alert--simulacro" role="status">
+          <strong>Simulacro en curso.</strong> Los cambios de estado corresponden a un ejercicio de práctica del plan.
+        </div>
+      )}
 
       <section className="kpis" aria-label="Resumen">
         {KPIS.map((kpi) => (
@@ -152,7 +170,10 @@ export default function Dashboard({ user, onOpenIncident }) {
                   <li key={i.id}>
                     <button type="button" onClick={() => onOpenIncident(i.id)}>
                       <span className="incident-mini__code">{i.codigo}</span>
-                      <SeverityBadge severidad={i.severidad} />
+                      <span className="incident-mini__badges">
+                        <SeverityBadge severidad={i.severidad} />
+                        <SimulacroBadge show={i.es_simulacro} />
+                      </span>
                       <span className="incident-mini__title">{i.titulo}</span>
                       <span className="muted small">Etapa: {stageLabel(i.etapa)}</span>
                     </button>
@@ -169,7 +190,7 @@ export default function Dashboard({ user, onOpenIncident }) {
             ) : (
               <ol className="timeline timeline--compact">
                 {ultimosEventos.map((e) => (
-                  <li key={e.id}>
+                  <li key={e.id} className={`timeline__item timeline__item--${e.evento}`}>
                     <span className="timeline__title">{EVENT_LABELS[e.evento] ?? e.evento}</span>
                     <span className="small">{e.servicio_nombre ?? e.detalle ?? ''}</span>
                     <span className="muted small">{formatDate(e.fecha)} · {e.usuario_nombre}</span>

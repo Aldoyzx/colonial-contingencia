@@ -13,6 +13,7 @@ import {
   getIncidentDetail,
   listIncidents,
 } from '../services/incidentService.js';
+import { getContingencyPlan } from '../services/planService.js';
 import { changeServiceStatus, getDashboard, listServices } from '../services/serviceStatusService.js';
 import { getActiveUser, listUsers } from '../services/userService.js';
 import {
@@ -76,6 +77,7 @@ export function createApp(db) {
   });
   api.get('/usuarios', async (_req, res) => res.json(await listUsers(db)));
   api.get('/flujo', (_req, res) => res.json(describeFlow()));
+  api.get('/plan', async (_req, res) => res.json(await getContingencyPlan(db)));
 
   api.use(authenticate(db));
 

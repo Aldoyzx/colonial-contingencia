@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard.jsx';
 import IncidentList from './components/IncidentList.jsx';
 import IncidentForm from './components/IncidentForm.jsx';
 import IncidentDetail from './components/IncidentDetail.jsx';
+import PlanView from './components/PlanView.jsx';
 
 const USER_STORAGE_KEY = 'contingencia.userId';
 
@@ -29,6 +30,7 @@ const NAV = [
   { key: 'panel', label: 'Panel de servicios' },
   { key: 'incidentes', label: 'Incidentes' },
   { key: 'nuevo', label: 'Registrar incidente' },
+  { key: 'plan', label: 'Plan de contingencia' },
 ];
 
 /** Enrutado por hash: permite enlaces directos (#/incidentes/3) sin dependencias extra. */
@@ -38,6 +40,7 @@ function parseHash(hash) {
   if (section === 'incidentes' && numericId > 0) return { name: 'detalle', id: numericId };
   if (section === 'incidentes') return { name: 'incidentes' };
   if (section === 'nuevo') return { name: 'nuevo' };
+  if (section === 'plan') return { name: 'plan' };
   return { name: 'panel' };
 }
 
@@ -131,6 +134,7 @@ export default function App() {
           <>
             {view.name === 'panel' && <Dashboard user={currentUser} onOpenIncident={openIncident} />}
             {view.name === 'incidentes' && <IncidentList key={userId} onOpen={openIncident} />}
+            {view.name === 'plan' && <PlanView />}
             {view.name === 'nuevo' && <IncidentForm users={users} currentUser={currentUser} onCreated={openIncident} />}
             {view.name === 'detalle' && (
               <IncidentDetail

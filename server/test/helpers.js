@@ -21,7 +21,7 @@ async function freshDatabase() {
     schemaReady = true;
     return;
   }
-  await db.query(`TRUNCATE ${DATA_TABLES} RESTART IDENTITY CASCADE`);
+  await db.query(`TRUNCATE ${DATA_TABLES} RESTART IDENTITY CASCADE; ALTER SEQUENCE incidente_numero_seq RESTART`);
   await db.query(await readFile(SQL_FILES.seed, 'utf8'));
 }
 

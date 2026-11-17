@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { ACTION_STATE_LABELS, SERVICE_STATE_LABELS, SEVERITY_LABELS } from '../constants.js';
 
 export function ServiceStateBadge({ estado }) {
@@ -44,5 +45,57 @@ export function Criticality({ value }) {
         <span key={i} className={i < value ? 'dot dot--on' : 'dot'} />
       ))}
     </span>
+  );
+}
+
+export function SimulacroBadge({ show = true }) {
+  if (!show) return null;
+  return <span className="badge badge--simulacro" title="Ejercicio de práctica, no es un incidente real">Simulacro</span>;
+}
+
+/**
+ * Diálogo modal accesible (elemento nativo <dialog>): bloquea el fondo, gestiona el foco
+ * y se cierra con Esc. Reemplaza a window.prompt, que no permite validar ni dar estilo.
+ */
+export function NoteDialog({ open, title, description, maxLength = 300, required = false, confirmLabel = 'Confirmar', onConfirm, onCancel }) {
+  const dialogRef = useRef(null);
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) {
+      setValue('');
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  const trimmed = value.trim();
+  const invalid = required && trimmed.length === 0;
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!invalid) onConfirm(trimmed || undefined);
+  };
+
+  return (
+    <dialog ref={dialogRef} className="dialog" onCancel={(e) => { e.preventDefault(); onCancel(); }} aria-labelledby="note-dialog-title">
+      <form method="dialog" onSubmit={submit} className="dialog__body">
+        <h3 id="note-dialog-title">{title}</h3>
+        {description && <p className="muted small">{description}</p>}
+        <label className="field">
+          <span>Nota {required ? '(obligatoria)' : '(opcional)'}</span>
+          <textarea rows={3} value={value} maxLength={maxLength} onChange={(e) => setValue(e.target.value)} autoFocus
+            placeholder="Ej.: SCADA validado por el operador de turno" />
+          <small className="muted">{value.length}/{maxLength}</small>
+        </label>
+        <div className="dialog__actions">
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>Cancelar</button>
+          <button type="submit" className="btn btn--primary" disabled={invalid}>{confirmLabel}</button>
+        </div>
+      </form>
+    </dialog>
   );
 }

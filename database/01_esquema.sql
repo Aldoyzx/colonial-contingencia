@@ -98,6 +98,9 @@ COMMENT ON COLUMN servicios.codigo IS 'Prefijo TI- u OT- obligatorio y coherente
 -- -----------------------------------------------------------------------------
 -- 4. Gestión del incidente
 -- -----------------------------------------------------------------------------
+-- Número correlativo del código INC-AAAA-NNNN; una secuencia es segura ante altas concurrentes.
+CREATE SEQUENCE incidente_numero_seq;
+
 CREATE TABLE incidentes (
   id                     INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   codigo                 VARCHAR(20)         NOT NULL UNIQUE,
@@ -107,6 +110,7 @@ CREATE TABLE incidentes (
   etapa                  VARCHAR(30)         NOT NULL REFERENCES etapas (clave),
   estado                 estado_incidente    NOT NULL DEFAULT 'abierto',
   intentos_erradicacion  SMALLINT            NOT NULL DEFAULT 0,
+  es_simulacro           BOOLEAN             NOT NULL DEFAULT FALSE,
   lecciones_aprendidas   TEXT,
   responsable_id         INTEGER             NOT NULL REFERENCES usuarios (id),
   creado_por             INTEGER             NOT NULL REFERENCES usuarios (id),
@@ -172,7 +176,18 @@ CREATE TABLE historial_recuperacion (
   usuario_id       INTEGER     NOT NULL REFERENCES usuarios (id),
   fecha            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-COMMENT ON TABLE historial_recuperacion IS 'Bitácora de auditoría: quién hizo qué y cuándo';
+COMMENT ON TABLE historial_recuperacion IS 'Bitácora de auditoría: quién hizo qué y cuándo (solo inserción)';
+
+-- La bitácora es inmutable: ni la aplicación ni un usuario con acceso a la base pueden alterarla.
+CREATE FUNCTION fn_historial_inmutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'historial_recuperacion es de solo inserción: % no permitido', TG_OP
+    USING ERRCODE = 'restrict_violation';
+END $$;
+
+CREATE TRIGGER trg_historial_inmutable
+  BEFORE UPDATE OR DELETE ON historial_recuperacion
+  FOR EACH ROW EXECUTE FUNCTION fn_historial_inmutable();
 
 -- -----------------------------------------------------------------------------
 -- 5. Índices sobre las claves foráneas y filtros más consultados
@@ -183,7 +198,7 @@ CREATE INDEX idx_inc_servicios_servicio ON incidente_servicios (servicio_id);
 CREATE INDEX idx_acciones_incidente     ON acciones (incidente_id, etapa);
 CREATE INDEX idx_acciones_responsable   ON acciones (responsable_id);
 CREATE INDEX idx_decisiones_incidente   ON decisiones (incidente_id);
-CREATE INDEX idx_historial_incidente    ON historial_recuperacion (incidente_id);
+CREATE INDEX idx_historial_incidente    ON historial_recuperacion (incidente_id, fecha DESC);
 CREATE INDEX idx_historial_servicio     ON historial_recuperacion (servicio_id);
 CREATE INDEX idx_etapa_recursos_recurso ON etapa_recursos (recurso_id);
 
@@ -210,7 +225,8 @@ SELECT i.codigo,
        (SELECT count(*) FROM acciones a WHERE a.incidente_id = i.id AND a.estado IN ('pendiente', 'en_progreso')) AS acciones_abiertas,
        (SELECT count(*) FROM decisiones d WHERE d.incidente_id = i.id) AS decisiones_tomadas,
        i.intentos_erradicacion,
-       round(extract(EPOCH FROM (coalesce(i.cerrado_en, now()) - i.detectado_en)) / 3600, 1) AS horas_transcurridas
+       round(extract(EPOCH FROM (coalesce(i.cerrado_en, now()) - i.detectado_en)) / 3600, 1) AS horas_transcurridas,
+       i.es_simulacro
   FROM incidentes i
   JOIN etapas e   ON e.clave = i.etapa
   JOIN usuarios u ON u.id = i.responsable_id;

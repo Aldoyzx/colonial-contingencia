@@ -12,6 +12,7 @@ export const createIncidentSchema = z.object({
   severidad: z.enum(['baja', 'media', 'alta', 'critica']),
   responsableId: positiveId,
   servicioIds: z.array(positiveId).min(1, 'Selecciona al menos un servicio afectado').max(50),
+  esSimulacro: z.boolean().optional().default(false),
 });
 
 export const listIncidentsQuerySchema = z.object({

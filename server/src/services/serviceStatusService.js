@@ -90,7 +90,7 @@ export async function getDashboard(db) {
   const [servicios, incidentesAbiertos, ultimosEventos] = await Promise.all([
     listServices(db),
     db.many(
-      `SELECT id, codigo, titulo, etapa, severidad, detectado_en
+      `SELECT id, codigo, titulo, etapa, severidad, detectado_en, es_simulacro
          FROM incidentes WHERE estado = 'abierto' ORDER BY id DESC`
     ),
     listRecentEvents(db, 12),

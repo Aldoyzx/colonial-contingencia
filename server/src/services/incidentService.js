@@ -75,7 +75,7 @@ function describeNextStep(incident) {
 
 export function listIncidents(db, { estado } = {}) {
   return db.many(
-    `SELECT i.id, i.codigo, i.titulo, i.severidad, i.etapa, i.estado, i.detectado_en, i.cerrado_en,
+    `SELECT i.id, i.codigo, i.titulo, i.severidad, i.etapa, i.estado, i.detectado_en, i.cerrado_en, i.es_simulacro,
             i.intentos_erradicacion, u.nombre AS responsable_nombre,
             (SELECT COUNT(*) FROM acciones a
               WHERE a.incidente_id = i.id AND a.estado IN ('pendiente','en_progreso')) AS acciones_abiertas
@@ -212,12 +212,13 @@ async function assertStageActionsClosed(db, incident) {
 
 // ---------------------------------------------------------------- casos de uso
 
+/** La secuencia de PostgreSQL entrega un número distinto a cada transacción, aunque sean simultáneas. */
 async function nextIncidentCode(db) {
-  const { next } = await db.one('SELECT COALESCE(MAX(id), 0) + 1 AS next FROM incidentes');
+  const { next } = await db.one(`SELECT nextval('incidente_numero_seq') AS next`);
   return `INC-${new Date().getFullYear()}-${String(next).padStart(4, '0')}`;
 }
 
-export function createIncident(db, { titulo, descripcion, severidad, responsableId, servicioIds }, user) {
+export function createIncident(db, { titulo, descripcion, severidad, responsableId, servicioIds, esSimulacro = false }, user) {
   return db.tx(async (tx) => {
     await requireActiveUserById(tx, responsableId);
 
@@ -228,9 +229,9 @@ export function createIncident(db, { titulo, descripcion, severidad, responsable
 
     const codigo = await nextIncidentCode(tx);
     const { id: incidentId } = await tx.one(
-      `INSERT INTO incidentes (codigo, titulo, descripcion, severidad, etapa, responsable_id, creado_por)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [codigo, titulo, descripcion, severidad, INITIAL_STAGE, responsableId, user.id]
+      `INSERT INTO incidentes (codigo, titulo, descripcion, severidad, etapa, responsable_id, creado_por, es_simulacro)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [codigo, titulo, descripcion, severidad, INITIAL_STAGE, responsableId, user.id, esSimulacro]
     );
     const incident = await getIncidentRow(tx, incidentId);
 
@@ -238,7 +239,7 @@ export function createIncident(db, { titulo, descripcion, severidad, responsable
       incidenteId: incident.id,
       evento: 'incidente_registrado',
       estadoNuevo: INITIAL_STAGE,
-      detalle: `${codigo}: ${titulo}`,
+      detalle: `${esSimulacro ? '[SIMULACRO] ' : ''}${codigo}: ${titulo}`,
       usuarioId: user.id,
     });
 

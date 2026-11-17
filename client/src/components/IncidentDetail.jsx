@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import { EVENT_LABELS, formatDate, stageLabel } from '../constants.js';
 import { useAsync } from '../useAsync.js';
 import ActionsPanel from './ActionsPanel.jsx';
-import { ErrorBanner, Loading, ServiceStateBadge, SeverityBadge } from './common.jsx';
+import { ErrorBanner, Loading, ServiceStateBadge, SeverityBadge, SimulacroBadge } from './common.jsx';
 import FlowStepper from './FlowStepper.jsx';
 import NextStepPanel from './NextStepPanel.jsx';
 
@@ -42,6 +42,7 @@ export default function IncidentDetail({ id, users, user, onBack }) {
           <p>{incident.descripcion}</p>
         </div>
         <div className="detail__meta">
+          <SimulacroBadge show={incident.es_simulacro} />
           <SeverityBadge severidad={incident.severidad} />
           <span className={`badge ${incident.estado === 'cerrado' ? 'badge--operativo' : 'badge--neutral'}`}>
             {incident.estado === 'cerrado' ? 'Cerrado' : stageLabel(incident.etapa)}

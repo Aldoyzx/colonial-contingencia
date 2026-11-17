@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api.js';
 import { formatDate, stageLabel } from '../constants.js';
 import { useAsync } from '../useAsync.js';
-import { ErrorBanner, Loading, SeverityBadge } from './common.jsx';
+import { ErrorBanner, Loading, SeverityBadge, SimulacroBadge } from './common.jsx';
 
 const FILTERS = [
   { value: '', label: 'Todos' },
@@ -56,7 +56,7 @@ export default function IncidentList({ onOpen }) {
             <tbody>
               {data.map((i) => (
                 <tr key={i.id} onClick={() => onOpen(i.id)} className="table__row--link">
-                  <td><strong>{i.codigo}</strong></td>
+                  <td><strong>{i.codigo}</strong> <SimulacroBadge show={i.es_simulacro} /></td>
                   <td>{i.titulo}</td>
                   <td><SeverityBadge severidad={i.severidad} /></td>
                   <td>{i.estado === 'cerrado' ? 'Cerrado' : stageLabel(i.etapa)}</td>

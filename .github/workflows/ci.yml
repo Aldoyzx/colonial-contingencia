@@ -1,0 +1,42 @@
+# Integración continua: en cada push o pull request levanta PostgreSQL 16,
+# ejecuta las pruebas del servidor y compila el cliente.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: contingencia
+          POSTGRES_PASSWORD: contingencia
+          POSTGRES_DB: contingencia_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U contingencia" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://contingencia:contingencia@localhost:5432/contingencia_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+      - name: Pruebas del servidor
+        working-directory: server
+        run: npm ci && npm test
+      - name: Script SQL de datos sincronizado con el código
+        working-directory: server
+        run: npm run db:generate-seed && git diff --exit-code ../database/02_datos_iniciales.sql
+      - name: Compilación del cliente
+        working-directory: client
+        run: npm ci && npm run build

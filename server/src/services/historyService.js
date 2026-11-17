@@ -17,7 +17,7 @@ const HISTORY_SELECT = `
     LEFT JOIN servicios s ON s.id = h.servicio_id`;
 
 export function listIncidentHistory(db, incidenteId) {
-  return db.many(`${HISTORY_SELECT} WHERE h.incidente_id = $1 ORDER BY h.id DESC`, [incidenteId]);
+  return db.many(`${HISTORY_SELECT} WHERE h.incidente_id = $1 ORDER BY h.fecha DESC, h.id DESC`, [incidenteId]);
 }
 
 export function listRecentEvents(db, limit = 10) {
@@ -27,7 +27,7 @@ export function listRecentEvents(db, limit = 10) {
        JOIN usuarios u ON u.id = h.usuario_id
        LEFT JOIN servicios s ON s.id = h.servicio_id
        LEFT JOIN incidentes i ON i.id = h.incidente_id
-      ORDER BY h.id DESC
+      ORDER BY h.fecha DESC, h.id DESC
       LIMIT $1`,
     [limit]
   );

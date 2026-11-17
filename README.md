@@ -51,6 +51,7 @@ Variables de entorno (copiar `server/.env.example` como `server/.env`): `PORT` y
 | `npm run db:reset` | Recrea el esquema con los datos iniciales |
 | `npm run db:demo` | Igual que `db:reset` y además carga el incidente real de mayo de 2021 |
 | `npm run db:generate-seed` | Regenera `database/02_datos_iniciales.sql` desde el código |
+| `npm run simulacro` | Ejecuta un simulacro completo del plan y escribe el informe en `docs/evidencias/` |
 
 ## Base de datos
 
@@ -64,6 +65,7 @@ servidor ejecuta esos mismos archivos.
 | `02_datos_iniciales.sql` | Catálogo del plan (10 etapas, D1–D4, 15 recursos), 5 usuarios y 10 servicios |
 | `03_verificacion.sql` | Consultas que listan tablas, restricciones, relaciones y vistas |
 | `04_datos_prueba.sql` | Incidente INC-2021-0001 completo (acciones, decisiones e historial) |
+| `05_migracion_actividad2.sql` | Correcciones de la revisión para bases creadas con la versión anterior |
 
 Diagrama entidad-relación: `docs/der/DER.png` (fuente Mermaid en `DER.mmd`).
 
@@ -79,6 +81,9 @@ Diagrama entidad-relación: `docs/der/DER.png` (fuente Mermaid en `DER.mmd`).
 | `acciones` | Tareas de respuesta, responsable, resultado y nodo de origen |
 | `decisiones` | D1–D4 tomadas, con justificación, etapa origen y destino |
 | `historial_recuperacion` | Bitácora de auditoría |
+
+Además, la bitácora es de solo inserción (trigger `trg_historial_inmutable`) y el código
+de incidente sale de la secuencia `incidente_numero_seq`.
 
 Restricciones destacadas: el prefijo del código de servicio debe coincidir con su tipo;
 un incidente cerrado exige etapa final, fecha y lecciones (mínimo 20 caracteres); una
@@ -97,6 +102,9 @@ client/ (React + Vite)                 server/ (Node + Express 5)              P
 
 - `domain/flow.js` es la fuente de verdad del diagrama; `02_datos_iniciales.sql` se genera
   a partir de él y una prueba comprueba que la base y el código coinciden.
+- El módulo **Plan de contingencia** muestra, desde la base, el procedimiento, el
+  responsable y los recursos tecnológicos de cada etapa.
+- Un incidente puede registrarse como **simulacro**: queda identificado en todo el sistema.
 - Cada caso de uso corre en **una transacción** con `SELECT … FOR UPDATE` sobre el
   incidente: dos usuarios no pueden decidir a la vez sobre el mismo incidente.
 
@@ -117,6 +125,7 @@ client/ (React + Vite)                 server/ (Node + Express 5)              P
 | GET | `/api/health` | Estado de la API y de la conexión a PostgreSQL |
 | GET | `/api/usuarios` | Usuarios activos |
 | GET | `/api/flujo` | Definición del flujo |
+| GET | `/api/plan` | Plan de contingencia: etapas, responsables, decisiones y recursos |
 | GET | `/api/dashboard` | Resumen, servicios, incidentes abiertos y eventos |
 | PATCH | `/api/servicios/:id/estado` | Cambio manual de estado `{ estado, nota? }` |
 | GET/POST | `/api/incidentes` | Listar (`?estado=`) o registrar incidentes |
@@ -135,5 +144,13 @@ con 400 validación, 401 sin usuario, 403 permiso, 404 no existe y 409 regla de 
 - Validación con zod en la API y restricciones CHECK / FK en la base (doble barrera).
 - helmet, límite de 20 kB por petición y errores internos sin trazas.
 - Rol de base de datos propio, sin privilegios de superusuario.
+- Integración continua en GitHub Actions: pruebas contra PostgreSQL 16 en cada push.
 - **Limitación conocida:** la identidad viaja en `X-User-Id` sin firma. En producción se
   reemplaza por OIDC/SSO con MFA (la lección del caso).
+
+## Documentación
+
+- `docs/der/DER.png`: diagrama entidad-relación.
+- `docs/revision-actividad2.md`: hallazgos de la revisión, correcciones y pendientes.
+- `docs/evidencias/`: informe del simulacro.
+- `docs/panel-figma.md`: especificación del panel para Figma.

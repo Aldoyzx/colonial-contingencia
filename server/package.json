@@ -13,7 +13,8 @@
     "test": "node --env-file-if-exists=.env --test --test-concurrency=1 \"test/**/*.test.js\"",
     "db:reset": "node --env-file-if-exists=.env src/db/reset.js",
     "db:demo": "node --env-file-if-exists=.env src/db/reset.js --demo",
-    "db:generate-seed": "node scripts/generate-seed-sql.js"
+    "db:generate-seed": "node scripts/generate-seed-sql.js",
+    "simulacro": "node --env-file-if-exists=.env scripts/simulacro.js"
   },
   "dependencies": {
     "express": "^5.1.0",

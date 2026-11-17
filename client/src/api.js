@@ -39,6 +39,7 @@ async function request(path, { method = 'GET', body } = {}) {
 export const api = {
   users: () => request('/usuarios'),
   flow: () => request('/flujo'),
+  plan: () => request('/plan'),
   dashboard: () => request('/dashboard'),
   services: () => request('/servicios'),
   changeServiceStatus: (id, data) => request(`/servicios/${id}/estado`, { method: 'PATCH', body: data }),

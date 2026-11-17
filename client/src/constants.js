@@ -72,12 +72,23 @@ export function canChangeService(user, service) {
   );
 }
 
-/** SQLite guarda datetime('now') en UTC sin zona; se normaliza antes de formatear. */
+/** PostgreSQL devuelve TIMESTAMPTZ en ISO 8601 con zona; se muestra en la hora local del navegador. */
 export function formatDate(value) {
   if (!value) return '—';
-  const iso = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
-  const date = new Date(iso);
+  const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' });
+    ? String(value)
+    : date.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' });
 }
+
+export const RESOURCE_CATEGORY_LABELS = {
+  herramienta: 'Herramienta',
+  infraestructura: 'Infraestructura',
+  servicio_externo: 'Servicio externo',
+  documento: 'Documento',
+};
+
+export const STAGE_TYPE_LABELS = {
+  accion: 'Acción',
+  decision: 'Decisión',
+};
