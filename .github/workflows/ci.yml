@@ -37,6 +37,8 @@ jobs:
       - name: Script SQL de datos sincronizado con el código
         working-directory: server
         run: npm run db:generate-seed && git diff --exit-code ../database/02_datos_iniciales.sql
+      - name: Auditoría de dependencias (vulnerabilidades altas o críticas)
+        run: (cd server && npm audit --omit=dev --audit-level=high) && (cd client && npm audit --omit=dev --audit-level=high)
       - name: Compilación del cliente
         working-directory: client
         run: npm ci && npm run build

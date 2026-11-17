@@ -1,156 +1,118 @@
 # Centro de Contingencia — Colonial Pipeline (2021)
 
 Sistema web para gestionar la respuesta a un ataque de ransomware sobre infraestructura
-crítica. Implementa el diagrama de flujo del plan de contingencia como una máquina de
-estados (etapas, decisiones D1–D4, ruta alternativa y reintento) e incluye el panel de
-estado de servicios diseñado en Figma (operativo / afectado / en recuperación).
+crítica. Convierte el plan de contingencia en una máquina de estados (etapas, decisiones
+D1–D4, ruta alternativa y reintento) y lo acompaña con un panel de servicios,
+**evidencias multimedia con cadena de custodia**, **seguridad con MFA** y **analítica de la
+respuesta**. Está listo para desplegarse en la nube (Render).
 
 | Capa | Tecnología |
 |---|---|
-| Diseño | Figma (4 pantallas: normal, crisis, recuperación y móvil) |
-| Frontend | React 19 + Vite 8, CSS con los tokens de Figma |
-| Backend | Node.js 22 + Express 5, validación con zod, cabeceras con helmet |
-| Base de datos | **PostgreSQL 16** (driver `pg`) |
-| Control de versiones | Git + GitHub |
+| Diseño | Figma (panel normal, crisis, recuperación y móvil) |
+| Frontend | React 19 + Vite 8 · Recharts 3 (gráficos) · CSS con los tokens de Figma |
+| Backend | Node.js 22 + Express 5 · zod · helmet · multer · file-type · qrcode |
+| Base de datos | PostgreSQL 16 (driver `pg`) |
+| Seguridad | scrypt, sesión firmada HS256 en cookie httpOnly, TOTP (RFC 6238), AES-256-GCM |
+| Nube | Render (Blueprint `render.yaml`) · guía en [DESPLIEGUE.md](DESPLIEGUE.md) |
+| Calidad | 53 pruebas automatizadas (`node:test`) · GitHub Actions |
 
-## Requisitos
+## Módulos
 
-- **Node.js 22 o superior** y npm 10
-- **PostgreSQL 16**, con una de estas dos opciones:
-  - Docker Desktop: `docker compose up -d` (recomendado; crea todo solo)
-  - PostgreSQL instalado (pgAdmin en Windows): ejecutar `database/00_crear_base_de_datos.sql`
+| Módulo | Qué hace |
+|---|---|
+| Acceso | Contraseña + código MFA, bloqueo tras 5 intentos, límite por IP |
+| Panel | Estado de los 10 servicios TI/OT, incidentes abiertos y eventos (se actualiza cada 10 s) |
+| Incidentes | Registro (real o simulacro), flujo D1–D4, acciones por responsable, bitácora |
+| Evidencias | Carga con arrastrar y soltar, visor (imagen, PDF, video, audio, registros), huella SHA-256, verificación de integridad, anulación con motivo y biblioteca |
+| Plan | Procedimiento, responsable y recursos tecnológicos de cada etapa |
+| Analítica | MTTR, MTTC, tiempo por etapa, horas fuera de servicio, decisiones, acciones, evidencias, eventos de seguridad y exportación CSV |
+| Mi cuenta | Activar MFA con QR, cambiar contraseña y, para el coordinador, la bitácora de seguridad |
 
-## Puesta en marcha
+## Puesta en marcha local
+
+Requisitos: Node.js 22 y PostgreSQL 16 (o Docker Desktop).
 
 ```bash
-# 1. Base de datos
-docker compose up -d
-#    o, con PostgreSQL instalado:
-#    psql -U postgres -f database/00_crear_base_de_datos.sql
-
-# 2. Dependencias
+docker compose up -d                      # o: psql -U postgres -f database/00_crear_base_de_datos.sql
 cd server && npm install
-cd ../client && npm install
-
-# 3. Ejecutar (modo presentación: un solo proceso en http://localhost:4000)
-cd ../client && npm run build
-cd ../server && npm run db:demo     # esquema + datos iniciales + incidente de prueba de 2021
-npm start
+cd ../client && npm install && npm run build
+cd ../server && npm run db:demo && npm start    # http://localhost:4000
 ```
 
-Al arrancar, el servidor crea el esquema si la base está vacía. Para desarrollo con recarga
-en caliente usa dos terminales: `cd server && npm run dev` y `cd client && npm run dev`
-(abre http://localhost:5173).
+Cuentas de demostración (contraseña `Colonial2021!`; cámbienla en "Mi cuenta"):
 
-Variables de entorno (copiar `server/.env.example` como `server/.env`): `PORT` y
-`DATABASE_URL` (por defecto `postgres://contingencia:contingencia@localhost:5432/contingencia`).
+| Usuario | Correo | Rol |
+|---|---|---|
+| María Torres | mtorres@colonial.local | Coordinadora de respuesta (decide D1–D4) |
+| Javier Ríos | jrios@colonial.local | Analista TI |
+| Lucía Paredes | lparedes@colonial.local | Operadora OT |
+| Andrés Salinas | asalinas@colonial.local | Asesoría legal |
+| Carla Méndez | cmendez@colonial.local | Comunicaciones |
 
 | Comando (en `server/`) | Qué hace |
 |---|---|
-| `npm test` | Pruebas automatizadas contra la base `contingencia_test` |
-| `npm run db:reset` | Recrea el esquema con los datos iniciales |
-| `npm run db:demo` | Igual que `db:reset` y además carga el incidente real de mayo de 2021 |
-| `npm run db:generate-seed` | Regenera `database/02_datos_iniciales.sql` desde el código |
-| `npm run simulacro` | Ejecuta un simulacro completo del plan y escribe el informe en `docs/evidencias/` |
+| `npm test` | 53 pruebas contra la base `contingencia_test` |
+| `npm run db:demo` | Recrea la base con datos iniciales e incidentes históricos (2021–2026) |
+| `npm run db:reset` | Recrea la base solo con los datos iniciales |
+| `npm run simulacro` | Ejecuta un simulacro completo y escribe el informe en `docs/evidencias/` |
+| `npm run db:generate-seed` / `db:generate-demo` | Regeneran los scripts 02 y 04 desde el código |
+
+## Variables de entorno (`server/.env`)
+
+| Variable | Por defecto | Descripción |
+|---|---|---|
+| `PORT` | 4000 | Puerto HTTP |
+| `DATABASE_URL` | `postgres://contingencia:contingencia@localhost:5432/contingencia` | Conexión a PostgreSQL |
+| `APP_SECRET` | aleatorio en desarrollo | Firma de sesiones y cifrado de MFA (obligatorio en producción, 32+ caracteres) |
+| `ALMACENAMIENTO` | `local` (`postgres` en producción) | Dónde se guardan las evidencias |
+| `MAX_ARCHIVO_MB` | 10 | Tamaño máximo por evidencia |
+| `MFA_OBLIGATORIO_ROLES` | vacío | Roles que no operan sin MFA, ej. `coordinador` |
+| `MOSTRAR_CUENTAS_DEMO` | `true` en desarrollo | Muestra las cuentas de prueba en el acceso |
+| `CARGAR_DATOS_DEMO` | `false` | Carga los incidentes históricos al crear la base |
+| `SESION_HORAS` · `LIMITE_LOGIN_POR_MINUTO` | 8 · 10 | Duración de la sesión y límite de intentos por IP |
 
 ## Base de datos
 
-Los scripts entregables están en `database/` y son la única fuente del esquema: el
-servidor ejecuta esos mismos archivos.
+`database/` contiene los scripts entregables; el servidor ejecuta esos mismos archivos.
 
 | Script | Contenido |
 |---|---|
-| `00_crear_base_de_datos.sql` | Rol `contingencia` y bases `contingencia` / `contingencia_test` |
-| `01_esquema.sql` | 8 tipos ENUM, 11 tablas, PK, FK, UNIQUE, CHECK, índices y 3 vistas |
-| `02_datos_iniciales.sql` | Catálogo del plan (10 etapas, D1–D4, 15 recursos), 5 usuarios y 10 servicios |
-| `03_verificacion.sql` | Consultas que listan tablas, restricciones, relaciones y vistas |
-| `04_datos_prueba.sql` | Incidente INC-2021-0001 completo (acciones, decisiones e historial) |
-| `05_migracion_actividad2.sql` | Correcciones de la revisión para bases creadas con la versión anterior |
+| `00_crear_base_de_datos.sql` | Rol `contingencia` y bases `contingencia` y `contingencia_test` |
+| `01_esquema.sql` | Esquema completo: 10 ENUM, 14 tablas, 29 claves foráneas, CHECK/UNIQUE, 2 triggers de auditoría, índices y 4 vistas |
+| `02_datos_iniciales.sql` | Catálogo del plan, 15 recursos, 5 usuarios (contraseña con scrypt) y 10 servicios |
+| `03_verificacion.sql` | Consultas de verificación de la estructura |
+| `04_datos_prueba.sql` | 7 incidentes históricos (2021–2026), incluidos 2 simulacros |
+| `05_…` · `06_migracion_entrega_final.sql` | Migraciones para bases creadas con versiones anteriores (se aplican solas) |
 
-Diagrama entidad-relación: `docs/der/DER.png` (fuente Mermaid en `DER.mmd`).
-
-| Tabla | Propósito |
-|---|---|
-| `etapas` | Nodos del plan: orden, tipo, procedimiento, rol responsable y etapa siguiente |
-| `decisiones_plan` | Rombos D1–D4 con su pregunta y destinos Sí / No |
-| `recursos_tecnologicos` / `etapa_recursos` | Recursos que necesita cada etapa (N:M) |
-| `usuarios` | Actores del plan y su rol |
-| `servicios` | Activos TI/OT, criticidad y estado actual |
-| `incidentes` | Incidente, etapa actual (FK a `etapas`), severidad, intentos y lecciones |
-| `incidente_servicios` | Servicios afectados por incidente (N:M) |
-| `acciones` | Tareas de respuesta, responsable, resultado y nodo de origen |
-| `decisiones` | D1–D4 tomadas, con justificación, etapa origen y destino |
-| `historial_recuperacion` | Bitácora de auditoría |
-
-Además, la bitácora es de solo inserción (trigger `trg_historial_inmutable`) y el código
-de incidente sale de la secuencia `incidente_numero_seq`.
-
-Restricciones destacadas: el prefijo del código de servicio debe coincidir con su tipo;
-un incidente cerrado exige etapa final, fecha y lecciones (mínimo 20 caracteres); una
-acción fallida exige resultado; D1, D2 y D4 se toman una sola vez por incidente (índice
-único parcial); los servicios vinculados a incidentes no se pueden borrar.
-
-## Arquitectura
-
-```
-client/ (React + Vite)                 server/ (Node + Express 5)              PostgreSQL 16
-  Dashboard ── polling 10 s ──┐          http/app.js      rutas y errores
-  IncidentDetail              ├─ /api ─► http/schemas.js  validación (zod)
-  IncidentForm / List         ┘          services/*       casos de uso ──── transacción ──► tablas
-                                         domain/flow.js   máquina de estados del plan      vistas
-```
-
-- `domain/flow.js` es la fuente de verdad del diagrama; `02_datos_iniciales.sql` se genera
-  a partir de él y una prueba comprueba que la base y el código coinciden.
-- El módulo **Plan de contingencia** muestra, desde la base, el procedimiento, el
-  responsable y los recursos tecnológicos de cada etapa.
-- Un incidente puede registrarse como **simulacro**: queda identificado en todo el sistema.
-- Cada caso de uso corre en **una transacción** con `SELECT … FOR UPDATE` sobre el
-  incidente: dos usuarios no pueden decidir a la vez sobre el mismo incidente.
-
-## Usuarios de prueba
-
-| Usuario | Rol | Puede |
-|---|---|---|
-| María Torres | Coordinador de respuesta | Decidir D1–D4, avanzar, cerrar y cambiar cualquier servicio |
-| Javier Ríos | Analista TI | Actualizar sus acciones y cambiar servicios TI |
-| Lucía Paredes | Operador OT | Actualizar sus acciones y cambiar servicios OT |
-| Andrés Salinas | Asesoría legal | Actualizar sus acciones (evaluación del rescate) |
-| Carla Méndez | Comunicaciones | Actualizar sus acciones (ruta alternativa) |
-
-## API
-
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET | `/api/health` | Estado de la API y de la conexión a PostgreSQL |
-| GET | `/api/usuarios` | Usuarios activos |
-| GET | `/api/flujo` | Definición del flujo |
-| GET | `/api/plan` | Plan de contingencia: etapas, responsables, decisiones y recursos |
-| GET | `/api/dashboard` | Resumen, servicios, incidentes abiertos y eventos |
-| PATCH | `/api/servicios/:id/estado` | Cambio manual de estado `{ estado, nota? }` |
-| GET/POST | `/api/incidentes` | Listar (`?estado=`) o registrar incidentes |
-| GET | `/api/incidentes/:id` | Detalle con acciones, decisiones, historial y siguiente paso |
-| POST | `/api/incidentes/:id/avanzar` | Avanzar en una etapa de acción |
-| POST | `/api/incidentes/:id/decisiones` | Decidir `{ respuesta, justificacion }` |
-| POST | `/api/incidentes/:id/acciones` | Acción manual |
-| PATCH | `/api/acciones/:id` | Actualizar estado y resultado |
-
-Las rutas protegidas exigen la cabecera `X-User-Id`. Errores: `{ error: { code, message, details? } }`
-con 400 validación, 401 sin usuario, 403 permiso, 404 no existe y 409 regla de negocio.
+Diagrama entidad-relación: `docs/der/DER.png`.
 
 ## Seguridad
 
-- Consultas parametrizadas (`$1, $2…`) en toda la capa SQL.
-- Validación con zod en la API y restricciones CHECK / FK en la base (doble barrera).
-- helmet, límite de 20 kB por petición y errores internos sin trazas.
-- Rol de base de datos propio, sin privilegios de superusuario.
-- Integración continua en GitHub Actions: pruebas contra PostgreSQL 16 en cada push.
-- **Limitación conocida:** la identidad viaja en `X-User-Id` sin firma. En producción se
-  reemplaza por OIDC/SSO con MFA (la lección del caso).
+- **Contraseñas** con scrypt (N = 2^15, r = 8, p = 1) y sal aleatoria; política de 10+ caracteres con mayúscula, minúscula y número.
+- **Sesión** en cookie `httpOnly`, `SameSite=Strict` y `Secure` (en producción), firmada con HMAC-SHA256; caduca en 8 h.
+- **MFA** con TOTP (RFC 6238), compatible con Google o Microsoft Authenticator; el secreto se guarda cifrado con AES-256-GCM. Se puede exigir por rol.
+- **Fuerza bruta:** bloqueo de la cuenta 15 min tras 5 fallos, límite de 10 intentos por minuto por IP y el mismo mensaje para correo inexistente o contraseña errónea (con tiempo de respuesta constante).
+- **CSRF:** cookie `SameSite=Strict` y cabecera `X-Requested-With` obligatoria en las modificaciones.
+- **Autorización por rol** en el servidor (decisiones, acciones, servicios TI/OT, evidencias y bitácora de seguridad).
+- **Archivos:** tipo validado por su firma binaria (no por la extensión), sin SVG ni HTML, `nosniff`, CSP `sandbox` y descarga con nombre saneado.
+- **Auditoría:** `historial_recuperacion` y `eventos_seguridad` son de solo inserción (triggers).
+- helmet (CSP, HSTS, X-Frame-Options), consultas parametrizadas y validación con zod en cada entrada.
+
+## API (resumen)
+
+| Grupo | Rutas |
+|---|---|
+| Sesión | `POST /api/auth/login`, `/auth/mfa`, `/auth/logout`, `/auth/clave`, `/auth/mfa/configurar`, `/auth/mfa/confirmar`, `/auth/mfa/desactivar` · `GET /auth/sesion`, `/auth/config` |
+| Operación | `GET /api/dashboard`, `/servicios`, `/plan`, `/incidentes[/:id]` · `POST /incidentes`, `/:id/avanzar`, `/:id/decisiones`, `/:id/acciones` · `PATCH /acciones/:id`, `/servicios/:id/estado` |
+| Evidencias | `GET/POST /api/incidentes/:id/evidencias` · `GET /evidencias`, `/evidencias/:id/contenido`, `/evidencias/:id/verificar` · `POST /evidencias/:id/anular` |
+| Analítica | `GET /api/analitica`, `/analitica/incidentes.csv`, `/seguridad/eventos` (coordinador) |
+| Salud | `GET /api/health` (base de datos y almacenamiento) |
+
+Errores: `{ error: { code, message, details? } }` con 400, 401, 403, 404, 409, 413 y 429.
 
 ## Documentación
 
+- [DESPLIEGUE.md](DESPLIEGUE.md): despliegue en Render paso a paso.
 - `docs/der/DER.png`: diagrama entidad-relación.
-- `docs/revision-actividad2.md`: hallazgos de la revisión, correcciones y pendientes.
-- `docs/evidencias/`: informe del simulacro.
-- `docs/panel-figma.md`: especificación del panel para Figma.
+- `docs/revision-actividad2.md`: hallazgos y correcciones de la revisión.
+- `docs/evidencias/`: informes de simulacro.

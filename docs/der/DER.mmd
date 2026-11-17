@@ -1,10 +1,4 @@
 erDiagram
-  usuarios ||--o{ incidentes : "registra"
-  incidentes ||--o{ incidente_servicios : "afecta"
-  servicios ||--o{ incidente_servicios : "es afectado"
-  incidentes ||--o{ acciones : "tiene"
-  etapas ||--o{ acciones : "pertenece"
-  usuarios ||--o{ acciones : "ejecuta"
   incidentes ||--o{ decisiones : "registra"
   decisiones_plan ||--o{ decisiones : "instancia de"
   etapas ||--o{ decisiones : "origen"
@@ -21,6 +15,19 @@ erDiagram
   recursos_tecnologicos ||--o{ etapa_recursos : "se usa en"
   etapas ||--o{ incidentes : "está en"
   usuarios ||--o{ incidentes : "responsable"
+  usuarios ||--o{ incidentes : "registra"
+  incidentes ||--o{ incidente_servicios : "afecta"
+  servicios ||--o{ incidente_servicios : "es afectado"
+  incidentes ||--o{ acciones : "tiene"
+  etapas ||--o{ acciones : "pertenece"
+  usuarios ||--o{ acciones : "ejecuta"
+  usuarios |o--o{ eventos_seguridad : "genera"
+  incidentes ||--o{ evidencias : "respalda"
+  acciones |o--o{ evidencias : "documenta"
+  etapas ||--o{ evidencias : "cargada en"
+  usuarios ||--o{ evidencias : "carga"
+  usuarios |o--o{ evidencias : "anula"
+  evidencias ||--o{ evidencia_contenidos : "contenido"
   usuarios {
     integer id PK
     varchar_100 nombre
@@ -28,6 +35,12 @@ erDiagram
     rol_usuario rol
     boolean activo
     timestamptz creado_en
+    varchar_200 clave_hash
+    boolean mfa_activo
+    varchar_300 mfa_secreto_cifrado
+    smallint intentos_fallidos
+    timestamptz bloqueado_hasta
+    timestamptz ultimo_acceso
   }
   incidentes {
     integer id PK
@@ -125,4 +138,38 @@ erDiagram
     varchar_120 nombre
     categoria_recurso categoria
     text descripcion
+  }
+  evidencias {
+    integer id PK
+    integer incidente_id FK
+    integer accion_id FK
+    varchar_30 etapa FK
+    varchar_255 nombre_original
+    varchar_100 tipo_mime
+    categoria_evidencia categoria
+    integer tamano_bytes
+    char_64 sha256
+    varchar_20 almacenamiento
+    varchar_300 clave_almacenamiento
+    varchar_500 descripcion
+    integer subido_por FK
+    timestamptz subido_en
+    boolean anulada
+    integer anulada_por FK
+    timestamptz anulada_en
+    varchar_300 motivo_anulacion
+  }
+  evidencia_contenidos {
+    integer evidencia_id PK,FK
+    bytea contenido
+  }
+  eventos_seguridad {
+    bigint id PK
+    integer usuario_id FK
+    varchar_120 email_intentado
+    tipo_evento_seguridad evento
+    varchar_45 ip
+    varchar_300 agente
+    varchar_500 detalle
+    timestamptz fecha
   }
