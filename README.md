@@ -14,7 +14,7 @@ respuesta**. Está listo para desplegarse en la nube (Render).
 | Base de datos | PostgreSQL 16 (driver `pg`) |
 | Seguridad | scrypt, sesión firmada HS256 en cookie httpOnly, TOTP (RFC 6238), AES-256-GCM |
 | Nube | Render (Blueprint `render.yaml`) · guía en [DESPLIEGUE.md](DESPLIEGUE.md) |
-| Calidad | 53 pruebas automatizadas (`node:test`) · GitHub Actions |
+| Calidad | 56 pruebas automatizadas (`node:test`) · GitHub Actions |
 
 ## Módulos
 
@@ -51,7 +51,7 @@ Cuentas de demostración (contraseña `Colonial2021!`; cámbienla en "Mi cuenta"
 
 | Comando (en `server/`) | Qué hace |
 |---|---|
-| `npm test` | 53 pruebas contra la base `contingencia_test` |
+| `npm test` | 56 pruebas contra la base `contingencia_test` |
 | `npm run db:demo` | Recrea la base con datos iniciales e incidentes históricos (2021–2026) |
 | `npm run db:reset` | Recrea la base solo con los datos iniciales |
 | `npm run simulacro` | Ejecuta un simulacro completo y escribe el informe en `docs/evidencias/` |
