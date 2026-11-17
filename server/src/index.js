@@ -6,8 +6,8 @@ import { createApp } from './http/app.js';
 const db = createDb(config.databaseUrl, config.databaseSsl ? { ssl: { rejectUnauthorized: true } } : {});
 
 try {
-  const created = await ensureDatabase(db);
-  if (created) console.log('Esquema creado y datos iniciales cargados.');
+  const created = await ensureDatabase(db, { withDemoData: config.loadDemoData });
+  if (created) console.log(`Esquema creado y datos iniciales cargados${config.loadDemoData ? ' (con incidentes históricos de prueba)' : ''}.`);
 } catch (error) {
   console.error(`No se pudo conectar o preparar PostgreSQL (${error.message}).`);
   console.error('Revisa DATABASE_URL o levanta la base con: docker compose up -d');

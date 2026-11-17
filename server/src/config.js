@@ -42,6 +42,8 @@ export const config = Object.freeze({
   /** Muestra las cuentas de demostración en la pantalla de acceso (solo para la sustentación). */
   showDemoAccounts: (env.MOSTRAR_CUENTAS_DEMO ?? (isProduction ? 'false' : 'true')) === 'true',
   storage,
+  /** Si la base está vacía al arrancar, carga también los incidentes históricos de prueba (útil en la nube, sin consola). */
+  loadDemoData: env.CARGAR_DATOS_DEMO === 'true',
   uploadsDir: env.UPLOADS_DIR ?? join(SERVER_ROOT, 'data', 'evidencias'),
   /** Intentos de inicio de sesión por minuto y por IP. */
   loginRateLimit: Number.parseInt(env.LIMITE_LOGIN_POR_MINUTO ?? '10', 10),

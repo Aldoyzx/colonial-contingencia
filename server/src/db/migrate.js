@@ -15,7 +15,7 @@ async function schemaExists(db) {
  * catálogo del plan (02 es idempotente, así que se aplica en cada arranque).
  * @returns {Promise<boolean>} true si el esquema se creó en esta llamada.
  */
-export async function ensureDatabase(db) {
+export async function ensureDatabase(db, { withDemoData = false } = {}) {
   const created = !(await schemaExists(db));
   if (created) await runFile(db, SQL_FILES.schema);
   else {
@@ -23,6 +23,7 @@ export async function ensureDatabase(db) {
     for (const file of SQL_FILES.migrations) await runFile(db, file);
   }
   await runFile(db, SQL_FILES.seed);
+  if (created && withDemoData) await runFile(db, SQL_FILES.demo);
   return created;
 }
 

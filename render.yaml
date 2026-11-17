@@ -1,0 +1,44 @@
+# Despliegue en Render (Blueprint): Dashboard → New → Blueprint → elegir este repositorio.
+# Crea la base PostgreSQL y el servicio web; el servidor crea el esquema al primer arranque.
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+
+databases:
+  - name: contingencia-db
+    plan: free                  # gratuita: 1 GB, vence a los 30 días (suficiente para la sustentación)
+    region: oregon
+    postgresMajorVersion: "16"
+    databaseName: contingencia
+    user: contingencia
+
+services:
+  - type: web
+    name: centro-contingencia
+    runtime: node
+    plan: free                  # se suspende tras 15 min sin tráfico; el primer acceso tarda ~1 min
+    region: oregon
+    # El cliente necesita sus devDependencies (Vite) para compilar aunque NODE_ENV sea production.
+    buildCommand: cd client && npm ci --include=dev && npm run build && cd ../server && npm ci --omit=dev
+    startCommand: cd server && npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: contingencia-db
+          property: connectionString
+      - key: APP_SECRET          # firma sesiones y cifra secretos MFA; Render genera 256 bits al azar
+        generateValue: true
+      - key: ALMACENAMIENTO      # el disco del plan gratuito es efímero: las evidencias van a PostgreSQL
+        value: postgres
+      - key: MAX_ARCHIVO_MB
+        value: "10"
+      - key: CARGAR_DATOS_DEMO   # carga los incidentes históricos al crear la base (para la analítica)
+        value: "true"
+      - key: MOSTRAR_CUENTAS_DEMO   # muestra las cuentas de prueba en el acceso; poner "false" fuera de la sustentación
+        value: "true"
+      - key: MFA_OBLIGATORIO_ROLES  # ej. "coordinador": ese rol no opera sin MFA
+        value: ""
