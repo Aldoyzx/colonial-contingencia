@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { BusinessRuleError, UnauthorizedError, ValidationError } from '../domain/errors.js';
-import { decrypt, encrypt } from '../security/encryption.js';
+import { decrypt, DecryptionError, encrypt } from '../security/encryption.js';
 import { hashPassword, passwordProblems, verifyPassword } from '../security/password.js';
 import { generateTotpSecret, otpauthUrl, verifyTotp } from '../security/totp.js';
 
@@ -8,6 +8,19 @@ export const MAX_FAILED_ATTEMPTS = 5;
 export const LOCK_MINUTES = 15;
 const ISSUER = 'Centro de Contingencia';
 const GENERIC_LOGIN_ERROR = 'Correo o contraseña incorrectos';
+
+/** Descifra el secreto MFA; si APP_SECRET cambió, responde con un error accionable en lugar de un 500. */
+function mfaSecretOf(row, secret, userId = row.id) {
+  try {
+    return decrypt(row.mfa_secreto_cifrado, secret);
+  } catch (error) {
+    if (!(error instanceof DecryptionError)) throw error;
+    console.error(`MFA ilegible para el usuario ${userId}: ${error.message}`);
+    throw new BusinessRuleError(
+      'No se puede verificar el segundo factor: la clave del servidor cambió. Contacta al administrador del sistema para restablecer el MFA de esta cuenta.',
+    );
+  }
+}
 
 /** Datos públicos del usuario (nunca el hash ni el secreto de MFA). */
 const PUBLIC_COLUMNS = 'id, nombre, email, rol, mfa_activo, ultimo_acceso';
@@ -90,7 +103,7 @@ export function authenticateMfa(db, userId, codigo, ctx, secret) {
     const user = await tx.one('SELECT * FROM usuarios WHERE id = $1 AND activo FOR UPDATE', [userId]);
     if (!user || !user.mfa_activo) throw new UnauthorizedError('Desafío MFA inválido');
     assertNotLocked(user);
-    if (!verifyTotp(decrypt(user.mfa_secreto_cifrado, secret), codigo)) {
+    if (!verifyTotp(mfaSecretOf(user, secret), codigo)) {
       await registerFailure(tx, user, ctx, 'mfa_fallido');
       return { ok: false };
     }
@@ -116,7 +129,7 @@ export function confirmMfaEnrollment(db, user, codigo, ctx, secret) {
     const row = await tx.one('SELECT mfa_activo, mfa_secreto_cifrado FROM usuarios WHERE id = $1 FOR UPDATE', [user.id]);
     if (row.mfa_activo) throw new BusinessRuleError('MFA ya está activo en esta cuenta');
     if (!row.mfa_secreto_cifrado) throw new BusinessRuleError('Primero genera el código QR');
-    if (!verifyTotp(decrypt(row.mfa_secreto_cifrado, secret), codigo)) {
+    if (!verifyTotp(mfaSecretOf(row, secret, user.id), codigo)) {
       throw new ValidationError('codigo: el código no coincide; revisa que la hora del teléfono sea correcta');
     }
     await tx.run('UPDATE usuarios SET mfa_activo = TRUE WHERE id = $1', [user.id]);
@@ -134,7 +147,7 @@ export function disableMfa(db, user, { clave, codigo }, ctx, secret, mfaRequired
     const row = await tx.one('SELECT * FROM usuarios WHERE id = $1 FOR UPDATE', [user.id]);
     if (!row.mfa_activo) throw new BusinessRuleError('MFA no está activo');
     const validPassword = await verifyPassword(clave, row.clave_hash);
-    if (!validPassword || !verifyTotp(decrypt(row.mfa_secreto_cifrado, secret), codigo)) {
+    if (!validPassword || !verifyTotp(mfaSecretOf(row, secret, user.id), codigo)) {
       throw new ValidationError('Contraseña o código incorrectos');
     }
     await tx.run('UPDATE usuarios SET mfa_activo = FALSE, mfa_secreto_cifrado = NULL WHERE id = $1', [user.id]);

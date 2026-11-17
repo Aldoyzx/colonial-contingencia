@@ -122,6 +122,29 @@ describe('Seguridad · autenticación, MFA y auditoría (HTTP)', () => {
     assert.equal((await fresh.call('/dashboard')).status, 200);
   });
 
+  test('si APP_SECRET cambia, el MFA responde 409 con un mensaje claro (no un 500)', async () => {
+    const email = 'rotacion@colonial.local';
+    await db.query(
+      `INSERT INTO usuarios (nombre, email, rol, clave_hash) SELECT 'Prueba rotación', $1, 'legal', clave_hash FROM usuarios WHERE email = $2`,
+      [email, EMAILS.coordinador],
+    );
+    const c = srv.client();
+    await c.login(email);
+    const { secreto } = (await c.call('/auth/mfa/configurar', { method: 'POST' })).body;
+    await c.call('/auth/mfa/confirmar', { method: 'POST', body: { codigo: totpCode(secreto) } });
+
+    const rotated = await startServer(db, testConfig({ appSecret: 'otra-clave-de-servidor-con-mas-de-32-caracteres' }));
+    try {
+      const fresh = rotated.client();
+      const step1 = await fresh.login(email);
+      const res = await fresh.call('/auth/mfa', { method: 'POST', body: { desafio: step1.body.desafio, codigo: totpCode(secreto) } });
+      assert.equal(res.status, 409);
+      assert.match(res.body.error.message, /clave del servidor cambió/);
+    } finally {
+      await rotated.close();
+    }
+  });
+
   test('un rol con MFA obligatorio no opera hasta activarlo', async () => {
     const strict = await startServer(db, testConfig({ mfaRequiredRoles: ['coordinador'] }));
     try {

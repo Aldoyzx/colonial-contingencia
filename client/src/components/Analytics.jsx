@@ -9,6 +9,8 @@ const C = { navy: '#1e3354', navySoft: '#2c4570', amber: '#f4c150', ok: '#2f8a57
 const SEVERITY_COLORS = { baja: C.muted, media: C.navySoft, alta: C.warn, critica: C.bad };
 const CATEGORY_COLORS = { imagen: C.navy, documento: C.ok, video: C.bad, audio: C.warn, registro: C.violet };
 const AXIS = { fontSize: 12, fill: C.muted };
+// Accesibilidad: sin animaciones si el sistema operativo pide reducir el movimiento.
+const ANIMATE = typeof window === 'undefined' || !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 function Kpi({ label, value, sub, tone = 'navy' }) {
   return (
@@ -86,7 +88,7 @@ export default function Analytics({ user }) {
               <XAxis type="number" tick={AXIS} unit=" h" />
               <YAxis type="category" dataKey="nombre" tick={AXIS} width={150} />
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} h`, 'Promedio']} />
-              <Bar dataKey="horas_promedio" radius={[0, 4, 4, 0]}>
+              <Bar isAnimationActive={ANIMATE} dataKey="horas_promedio" radius={[0, 4, 4, 0]}>
                 {stages.map((s) => <Cell key={s.etapa} fill={s.etapa === slowest?.etapa ? C.bad : C.navy} />)}
               </Bar>
             </BarChart>
@@ -100,7 +102,7 @@ export default function Analytics({ user }) {
               <XAxis dataKey="codigo" tick={{ ...AXIS, fontSize: 11 }} interval={0} angle={-30} textAnchor="end" height={55} />
               <YAxis tick={AXIS} unit=" h" />
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} h`, 'Fuera de servicio']} labelFormatter={(l) => downtime.find((d) => d.codigo === l)?.nombre ?? l} />
-              <Bar dataKey="horas" radius={[4, 4, 0, 0]}>
+              <Bar isAnimationActive={ANIMATE} dataKey="horas" radius={[4, 4, 0, 0]}>
                 {downtime.map((d) => <Cell key={d.codigo} fill={d.tipo === 'OT' ? C.bad : C.navySoft} />)}
               </Bar>
             </BarChart>
@@ -115,7 +117,7 @@ export default function Analytics({ user }) {
               <XAxis dataKey="nombre" tick={AXIS} />
               <YAxis tick={AXIS} allowDecimals={false} />
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => [v, 'Incidentes']} />
-              <Bar dataKey="cantidad" radius={[4, 4, 0, 0]} label={{ position: 'top', fontSize: 12, fill: C.navy }}>
+              <Bar isAnimationActive={ANIMATE} dataKey="cantidad" radius={[4, 4, 0, 0]} label={{ position: 'top', fontSize: 12, fill: C.navy }}>
                 {severity.map((s) => <Cell key={s.severidad} fill={SEVERITY_COLORS[s.severidad]} />)}
               </Bar>
             </BarChart>
@@ -130,8 +132,8 @@ export default function Analytics({ user }) {
               <YAxis tick={AXIS} allowDecimals={false} />
               <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => decisions.find((d) => d.codigo === l)?.pregunta ?? l} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="si" name="Sí" stackId="d" fill={C.ok} />
-              <Bar dataKey="no" name="No" stackId="d" fill={C.bad} radius={[4, 4, 0, 0]} />
+              <Bar isAnimationActive={ANIMATE} dataKey="si" name="Sí" stackId="d" fill={C.ok} />
+              <Bar isAnimationActive={ANIMATE} dataKey="no" name="No" stackId="d" fill={C.bad} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -144,8 +146,8 @@ export default function Analytics({ user }) {
               <YAxis tick={AXIS} allowDecimals={false} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="reales" name="Reales" stackId="m" fill={C.navy} />
-              <Bar dataKey="simulacros" name="Simulacros" stackId="m" fill={C.violet} radius={[4, 4, 0, 0]} />
+              <Bar isAnimationActive={ANIMATE} dataKey="reales" name="Reales" stackId="m" fill={C.navy} />
+              <Bar isAnimationActive={ANIMATE} dataKey="simulacros" name="Simulacros" stackId="m" fill={C.violet} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -158,9 +160,9 @@ export default function Analytics({ user }) {
               <YAxis tick={AXIS} allowDecimals={false} />
               <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => { const o = owners.find((x) => x.nombre === l); return o ? `${o.nombre} · ${o.rolLabel}` : l; }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="completadas" name="Completadas" stackId="a" fill={C.ok} />
-              <Bar dataKey="fallidas" name="Fallidas" stackId="a" fill={C.bad} />
-              <Bar dataKey="abiertas" name="Abiertas" stackId="a" fill={C.amber} radius={[4, 4, 0, 0]} />
+              <Bar isAnimationActive={ANIMATE} dataKey="completadas" name="Completadas" stackId="a" fill={C.ok} />
+              <Bar isAnimationActive={ANIMATE} dataKey="fallidas" name="Fallidas" stackId="a" fill={C.bad} />
+              <Bar isAnimationActive={ANIMATE} dataKey="abiertas" name="Abiertas" stackId="a" fill={C.amber} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -169,7 +171,7 @@ export default function Analytics({ user }) {
           {evidence.length === 0 ? <p className="muted">Aún no hay evidencias cargadas.</p> : (
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
-                <Pie data={evidence} dataKey="cantidad" nameKey="nombre" innerRadius={55} outerRadius={90} paddingAngle={2} isAnimationActive={false} label={({ nombre, cantidad }) => `${nombre}: ${cantidad}`}>
+                <Pie data={evidence} dataKey="cantidad" nameKey="nombre" innerRadius={55} outerRadius={90} paddingAngle={2} isAnimationActive={ANIMATE} label={({ nombre, cantidad }) => `${nombre}: ${cantidad}`}>
                   {evidence.map((e) => <Cell key={e.categoria} fill={CATEGORY_COLORS[e.categoria]} />)}
                 </Pie>
                 <Tooltip contentStyle={tooltipStyle} formatter={(v, _n, p) => [`${v} archivos · ${formatBytes(p.payload.bytes)}`, p.payload.nombre]} />
@@ -186,7 +188,7 @@ export default function Analytics({ user }) {
                 <XAxis type="number" tick={AXIS} allowDecimals={false} />
                 <YAxis type="category" dataKey="nombre" tick={AXIS} width={140} />
                 <Tooltip contentStyle={tooltipStyle} formatter={(v) => [v, 'Eventos']} />
-                <Bar dataKey="cantidad" radius={[0, 4, 4, 0]}>
+                <Bar isAnimationActive={ANIMATE} dataKey="cantidad" radius={[0, 4, 4, 0]}>
                   {security.map((s) => <Cell key={s.evento} fill={/fallido|bloqueada|denegado/.test(s.evento) ? C.bad : C.navy} />)}
                 </Bar>
               </BarChart>

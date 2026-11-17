@@ -10,10 +10,17 @@ export function encrypt(plain, secret) {
   return ['v1', iv.toString('base64'), cipher.getAuthTag().toString('base64'), data.toString('base64')].join('.');
 }
 
+/** El dato no se puede descifrar: formato desconocido o cifrado con otra clave (APP_SECRET cambió). */
+export class DecryptionError extends Error {}
+
 export function decrypt(payload, secret) {
   const [version, iv, tag, data] = String(payload).split('.');
-  if (version !== 'v1') throw new Error('Formato de cifrado desconocido');
-  const decipher = createDecipheriv('aes-256-gcm', keyFrom(secret), Buffer.from(iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(tag, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
+  if (version !== 'v1' || !iv || !tag || !data) throw new DecryptionError('Formato de cifrado desconocido');
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', keyFrom(secret), Buffer.from(iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
+  } catch (cause) {
+    throw new DecryptionError('No se pudo descifrar: la clave no coincide o el dato fue alterado', { cause });
+  }
 }

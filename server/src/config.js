@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +22,17 @@ if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
 if (isProduction && (!env.APP_SECRET || env.APP_SECRET.length < 32)) {
   throw new Error('En producción APP_SECRET es obligatorio y debe tener al menos 32 caracteres');
 }
-const appSecret = env.APP_SECRET ?? `dev-${randomBytes(24).toString('hex')}`;
+// En desarrollo, sin APP_SECRET se usa un secreto local persistente (server/data, fuera de git):
+// si fuera aleatorio por arranque, cada reinicio invalidaría los secretos MFA ya cifrados.
+function devSecret() {
+  const file = join(SERVER_ROOT, 'data', 'dev-app-secret');
+  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  const secret = `dev-${randomBytes(24).toString('hex')}`;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, secret, { mode: 0o600 });
+  return secret;
+}
+const appSecret = env.APP_SECRET ?? devSecret();
 
 const storage = env.ALMACENAMIENTO ?? (isProduction ? 'postgres' : 'local');
 if (!['local', 'postgres'].includes(storage)) {
