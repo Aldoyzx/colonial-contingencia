@@ -88,7 +88,7 @@ Diagrama entidad-relación: `docs/der/DER.png`.
 
 ## Seguridad
 
-- **Contraseñas** con scrypt (N = 2^15, r = 8, p = 1) y sal aleatoria; política de 10+ caracteres con mayúscula, minúscula y número.
+- **Contraseñas** con scrypt (N = 2^15, r = 8, p = 3, configuración de OWASP) y sal aleatoria; política de NIST SP 800-63B-4: 12+ caracteres y rechazo de contraseñas previsibles, sin reglas de composición.
 - **Sesión** en cookie `httpOnly`, `SameSite=Strict` y `Secure` (en producción), firmada con HMAC-SHA256; caduca en 8 h.
 - **MFA** con TOTP (RFC 6238), compatible con Google o Microsoft Authenticator; el secreto se guarda cifrado con AES-256-GCM. Se puede exigir por rol.
 - **Fuerza bruta:** bloqueo de la cuenta 15 min tras 5 fallos, límite de 10 intentos por minuto por IP y el mismo mensaje para correo inexistente o contraseña errónea (con tiempo de respuesta constante).

@@ -106,7 +106,7 @@ function PasswordSection() {
   return (
     <section className="panel account-card">
       <header className="panel__head"><h3>Contraseña</h3></header>
-      <p className="muted small">Mínimo 10 caracteres, con mayúscula, minúscula y número. Se guarda con scrypt: nadie puede leerla, ni siquiera en la base de datos.</p>
+      <p className="muted small">Mínimo 12 caracteres; una frase larga es más segura que una palabra con símbolos (NIST SP 800-63B-4). Se rechazan palabras previsibles como el nombre de la empresa. Se guarda con scrypt: nadie puede leerla, ni siquiera en la base de datos.</p>
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {done && <div className="alert alert--success" role="status">Contraseña actualizada.</div>}
       <form className="account-form" onSubmit={submit}>

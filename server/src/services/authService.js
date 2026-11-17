@@ -149,7 +149,7 @@ export function changePassword(db, user, { actual, nueva }, ctx) {
     if (!(await verifyPassword(actual, row.clave_hash))) {
       throw new ValidationError('actual: la contraseña actual no es correcta');
     }
-    const problems = passwordProblems(nueva);
+    const problems = passwordProblems(nueva, { email: user.email });
     if (problems.length > 0) throw new ValidationError(`nueva: debe tener ${problems.join(', ')}`);
     if (actual === nueva) throw new ValidationError('nueva: debe ser distinta de la actual');
     await tx.run('UPDATE usuarios SET clave_hash = $1 WHERE id = $2', [await hashPassword(nueva), user.id]);

@@ -20,16 +20,18 @@ describe('Seguridad · primitivas criptográficas', () => {
 
   test('scrypt: verifica la contraseña correcta y rechaza las demás', async () => {
     const stored = await hashPassword('Colonial2021!');
-    assert.match(stored, /^scrypt\$32768\$8\$1\$/);
+    assert.match(stored, /^scrypt\$32768\$8\$3\$/);
     assert.ok(await verifyPassword('Colonial2021!', stored));
     assert.ok(!(await verifyPassword('colonial2021!', stored)));
     assert.ok(!(await verifyPassword('x', 'formato-invalido')));
     assert.notEqual(stored, await hashPassword('Colonial2021!'), 'la sal aleatoria produce hashes distintos');
   });
 
-  test('política de contraseñas', () => {
-    assert.deepEqual(passwordProblems('Colonial2021!'), []);
-    assert.ok(passwordProblems('corta').length >= 3);
+  test('política de contraseñas (NIST SP 800-63B-4: longitud y lista de prohibidas)', () => {
+    assert.deepEqual(passwordProblems('tren azul hacia linden'), [], 'una frase larga es válida sin símbolos');
+    assert.ok(passwordProblems('corta').length >= 1);
+    assert.ok(passwordProblems('Colonial2021!').some((p) => p.includes('colonial')), 'rechaza palabras del contexto');
+    assert.ok(passwordProblems('mtorres-segura-2026', { email: 'mtorres@colonial.local' }).includes('no contener tu usuario'));
   });
 
   test('tokens firmados: rechazan firma alterada, tipo incorrecto y vencimiento', () => {
@@ -137,8 +139,8 @@ describe('Seguridad · autenticación, MFA y auditoría (HTTP)', () => {
     const c = srv.client();
     await c.login(EMAILS.comunicaciones);
     assert.equal((await c.call('/auth/clave', { method: 'POST', body: { actual: 'Colonial2021!', nueva: 'corta' } })).status, 400);
-    assert.equal((await c.call('/auth/clave', { method: 'POST', body: { actual: 'Colonial2021!', nueva: 'NuevaClave2026' } })).status, 204);
-    assert.equal((await srv.client().login(EMAILS.comunicaciones, 'NuevaClave2026')).status, 200);
+    assert.equal((await c.call('/auth/clave', { method: 'POST', body: { actual: 'Colonial2021!', nueva: 'Turno de noche 2026' } })).status, 204);
+    assert.equal((await srv.client().login(EMAILS.comunicaciones, 'Turno de noche 2026')).status, 200);
     assert.equal((await c.call('/auth/logout', { method: 'POST' })).status, 204);
     assert.equal((await c.call('/dashboard')).status, 401);
   });

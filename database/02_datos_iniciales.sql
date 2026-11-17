@@ -95,11 +95,11 @@ ON CONFLICT DO NOTHING;
 -- Usuarios (actores del plan). Contraseña inicial de demostración: ver server/src/db/seedData.js.
 -- Si la cuenta ya existe, solo completa la contraseña cuando aún no tiene una.
 INSERT INTO usuarios (nombre, email, rol, clave_hash) VALUES
-  ('María Torres', 'mtorres@colonial.local', 'coordinador', 'scrypt$32768$8$1$STv3RauCtEdRUyf7J+hhwg==$siznqX2xfVMUYG/Lgj26cxJwIiwo/0l6ridj4LolacbL8WAo3it4iCWS7dh6P9wtDyXE3NBe5Jg3suL8Agza0g=='),
-  ('Javier Ríos', 'jrios@colonial.local', 'analista_ti', 'scrypt$32768$8$1$1ikNr6F6EdSqXh4ukbhHKA==$6GkaNHw13udXuOm0+ULKCPcLsyYvq11/yLQzF7fBoXc3pIjETCAGIZyyCX/jxylT6I4YTC733NCS2OWeIqdgIw=='),
-  ('Lucía Paredes', 'lparedes@colonial.local', 'operador_ot', 'scrypt$32768$8$1$tadMTW4+0ZDdVNBI4PveCA==$h1wcRKdDIXXQxJLr/9mg7y4TIq664mp8kjP4iKq6qzEytQqggWnQ+o2mwPnV17l2LW4jzBx5SLFZRXUhwEXpFw=='),
-  ('Andrés Salinas', 'asalinas@colonial.local', 'legal', 'scrypt$32768$8$1$mLhKXJKYHbmnrdapiCL7CA==$MdPWYUNPKB4HGO/18cocWcnGBr96ifWO+ygUOhSB0R6r826Ebn1SDURcum87erF471ZbZ/3/PpCwp+svs143TQ=='),
-  ('Carla Méndez', 'cmendez@colonial.local', 'comunicaciones', 'scrypt$32768$8$1$tjaknJ7RiEgqTSTQdo7sjA==$gzIEqtzsYIAfYQ2WfaZXbT55VtUDM3SvShDEttGr3MZNpRgWljc0exthbB+A6YGtnRamIMMSDWj0yDuumMy7Og==')
+  ('María Torres', 'mtorres@colonial.local', 'coordinador', 'scrypt$32768$8$3$STv3RauCtEdRUyf7J+hhwg==$DPzzgy0QzL24zL4xr+rBTpbtEOgetmmbD85Xd/hkRFKKDTAGa6L+179uTZ2pK05HjRQXp1/4IbpPAoAfqF8MyQ=='),
+  ('Javier Ríos', 'jrios@colonial.local', 'analista_ti', 'scrypt$32768$8$3$1ikNr6F6EdSqXh4ukbhHKA==$YKkiHYhtOV1FrFS9rY8LO8R1eh/1jpYZCac3gNLvkQ2XsesHM49+Y6J5aTJ1mHI7L/FDGdpq5bn97Oz75tWpFg=='),
+  ('Lucía Paredes', 'lparedes@colonial.local', 'operador_ot', 'scrypt$32768$8$3$tadMTW4+0ZDdVNBI4PveCA==$fgEv0btTg3t3/PXAz3pRs9BFpzl3tLoLglKYWCUOzCVoMUsLeX8pAmLtArj/QcbtfanWmomzdQkPe5mXGwzINw=='),
+  ('Andrés Salinas', 'asalinas@colonial.local', 'legal', 'scrypt$32768$8$3$mLhKXJKYHbmnrdapiCL7CA==$s9oyar+ZhSkRcRPsu9fHAL4gm+kx8gFNGDPWuXJOfNb3EJg8sDXGIQD8n6Huf2HC8vM+slV38gYIYdfFRFWBfA=='),
+  ('Carla Méndez', 'cmendez@colonial.local', 'comunicaciones', 'scrypt$32768$8$3$tjaknJ7RiEgqTSTQdo7sjA==$SgLIrJdmoUg45iCUfWc2bj+ESVWHvRl0pRY6cPc7NT5qN+gNhgkMwhLoQI0nw+E7Yaxg5s6dphaj8LPMW+tvxQ==')
 ON CONFLICT (email) DO UPDATE SET clave_hash = COALESCE(usuarios.clave_hash, EXCLUDED.clave_hash);
 
 -- Servicios TI / OT del oleoducto
