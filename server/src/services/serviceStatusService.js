@@ -1,6 +1,6 @@
 import { BusinessRuleError, NotFoundError } from '../domain/errors.js';
 import { assertCanChangeService } from '../domain/permissions.js';
-import { recordHistory, listRecentEvents } from './historyService.js';
+import { listRecentEvents, recordHistory } from './historyService.js';
 
 export const SERVICE_STATES = Object.freeze(['operativo', 'afectado', 'en_recuperacion']);
 
@@ -15,11 +15,11 @@ const MANUAL_TRANSITIONS = Object.freeze({
 });
 
 export function listServices(db) {
-  return db.prepare('SELECT * FROM servicios ORDER BY tipo DESC, criticidad DESC, codigo').all();
+  return db.many(`SELECT * FROM servicios ORDER BY tipo DESC, criticidad DESC, codigo`);
 }
 
-export function getService(db, serviceId) {
-  const service = db.prepare('SELECT * FROM servicios WHERE id = ?').get(serviceId);
+export async function getService(db, serviceId, { forUpdate = false } = {}) {
+  const service = await db.one(`SELECT * FROM servicios WHERE id = $1${forUpdate ? ' FOR UPDATE' : ''}`, [serviceId]);
   if (!service) throw new NotFoundError('Servicio', serviceId);
   return service;
 }
@@ -27,16 +27,17 @@ export function getService(db, serviceId) {
 /**
  * Aplica un cambio de estado y lo audita. Usado tanto por cambios manuales
  * como por los efectos automáticos del flujo de contingencia.
- * @returns {boolean} true si el estado cambió.
+ * @returns {Promise<boolean>} true si el estado cambió.
  */
-export function applyServiceStatus(db, service, nuevoEstado, { nota = null, incidenteId = null, usuarioId, evento }) {
+export async function applyServiceStatus(db, service, nuevoEstado, { nota = null, incidenteId = null, usuarioId, evento }) {
   if (service.estado === nuevoEstado && service.nota_estado === nota) return false;
 
-  db.prepare(
-    `UPDATE servicios SET estado = ?, nota_estado = ?, actualizado_en = datetime('now') WHERE id = ?`
-  ).run(nuevoEstado, nota, service.id);
+  await db.run(
+    `UPDATE servicios SET estado = $1, nota_estado = $2, actualizado_en = now() WHERE id = $3`,
+    [nuevoEstado, nota, service.id]
+  );
 
-  recordHistory(db, {
+  await recordHistory(db, {
     incidenteId,
     servicioId: service.id,
     evento,
@@ -49,19 +50,20 @@ export function applyServiceStatus(db, service, nuevoEstado, { nota = null, inci
 }
 
 /** Último incidente abierto que afecta al servicio, para enlazar el historial. */
-function findOpenIncidentForService(db, serviceId) {
-  const row = db.prepare(
+async function findOpenIncidentForService(db, serviceId) {
+  const row = await db.one(
     `SELECT i.id FROM incidentes i
        JOIN incidente_servicios isv ON isv.incidente_id = i.id
-      WHERE isv.servicio_id = ? AND i.estado = 'abierto'
-      ORDER BY i.id DESC LIMIT 1`
-  ).get(serviceId);
+      WHERE isv.servicio_id = $1 AND i.estado = 'abierto'
+      ORDER BY i.id DESC LIMIT 1`,
+    [serviceId]
+  );
   return row?.id ?? null;
 }
 
 export function changeServiceStatus(db, serviceId, { estado, nota }, user) {
-  return db.transaction(() => {
-    const service = getService(db, serviceId);
+  return db.tx(async (tx) => {
+    const service = await getService(tx, serviceId, { forUpdate: true });
     assertCanChangeService(user, service);
 
     if (service.estado === estado) {
@@ -74,28 +76,30 @@ export function changeServiceStatus(db, serviceId, { estado, nota }, user) {
       );
     }
 
-    applyServiceStatus(db, service, estado, {
+    await applyServiceStatus(tx, service, estado, {
       nota: nota ?? null,
-      incidenteId: findOpenIncidentForService(db, serviceId),
+      incidenteId: await findOpenIncidentForService(tx, serviceId),
       usuarioId: user.id,
       evento: 'cambio_estado_servicio',
     });
-    return getService(db, serviceId);
-  })();
+    return getService(tx, serviceId);
+  });
 }
 
-export function getDashboard(db) {
-  const servicios = listServices(db);
+export async function getDashboard(db) {
+  const [servicios, incidentesAbiertos, ultimosEventos] = await Promise.all([
+    listServices(db),
+    db.many(
+      `SELECT id, codigo, titulo, etapa, severidad, detectado_en
+         FROM incidentes WHERE estado = 'abierto' ORDER BY id DESC`
+    ),
+    listRecentEvents(db, 12),
+  ]);
 
   const resumen = SERVICE_STATES.reduce((acc, estado) => ({ ...acc, [estado]: 0 }), { total: servicios.length });
   servicios.forEach((s) => { resumen[s.estado] += 1; });
 
   const disponibilidad = servicios.length === 0 ? 100 : Math.round((resumen.operativo / servicios.length) * 100);
-
-  const incidentesAbiertos = db.prepare(
-    `SELECT id, codigo, titulo, etapa, severidad, detectado_en
-       FROM incidentes WHERE estado = 'abierto' ORDER BY id DESC`
-  ).all();
 
   return {
     generadoEn: new Date().toISOString(),
@@ -105,6 +109,6 @@ export function getDashboard(db) {
       TI: servicios.filter((s) => s.tipo === 'TI'),
     },
     incidentesAbiertos,
-    ultimosEventos: listRecentEvents(db, 12),
+    ultimosEventos,
   };
 }

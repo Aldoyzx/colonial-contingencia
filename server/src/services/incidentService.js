@@ -17,33 +17,36 @@ import { findUserByRole, requireActiveUserById } from './userService.js';
 
 // ---------------------------------------------------------------- lecturas
 
-function getIncidentRow(db, incidentId) {
-  const incident = db.prepare('SELECT * FROM incidentes WHERE id = ?').get(incidentId);
+async function getIncidentRow(db, incidentId, { forUpdate = false } = {}) {
+  const incident = await db.one(`SELECT * FROM incidentes WHERE id = $1${forUpdate ? ' FOR UPDATE' : ''}`, [incidentId]);
   if (!incident) throw new NotFoundError('Incidente', incidentId);
   return incident;
 }
 
-function getOpenIncidentRow(db, incidentId) {
-  const incident = getIncidentRow(db, incidentId);
+/** Bloquea la fila del incidente (FOR UPDATE) para que dos usuarios no lo modifiquen a la vez. */
+async function lockOpenIncident(db, incidentId) {
+  const incident = await getIncidentRow(db, incidentId, { forUpdate: true });
   if (incident.estado !== 'abierto') throw new BusinessRuleError(`El incidente ${incident.codigo} ya está cerrado`);
   return incident;
 }
 
 function listIncidentServices(db, incidentId) {
-  return db.prepare(
+  return db.many(
     `SELECT s.* FROM servicios s
        JOIN incidente_servicios isv ON isv.servicio_id = s.id
-      WHERE isv.incidente_id = ?
-      ORDER BY s.tipo DESC, s.criticidad DESC`
-  ).all(incidentId);
+      WHERE isv.incidente_id = $1
+      ORDER BY s.tipo DESC, s.criticidad DESC`,
+    [incidentId]
+  );
 }
 
 function listDecisions(db, incidentId) {
-  return db.prepare(
+  return db.many(
     `SELECT d.*, u.nombre AS usuario_nombre FROM decisiones d
        JOIN usuarios u ON u.id = d.usuario_id
-      WHERE d.incidente_id = ? ORDER BY d.id`
-  ).all(incidentId).map((d) => ({ ...d, respuesta: Boolean(d.respuesta) }));
+      WHERE d.incidente_id = $1 ORDER BY d.id`,
+    [incidentId]
+  );
 }
 
 /** Qué puede hacerse ahora con el incidente; el cliente lo usa para pintar los controles. */
@@ -71,29 +74,28 @@ function describeNextStep(incident) {
 }
 
 export function listIncidents(db, { estado } = {}) {
-  const where = estado ? 'WHERE i.estado = ?' : '';
-  return db.prepare(
+  return db.many(
     `SELECT i.id, i.codigo, i.titulo, i.severidad, i.etapa, i.estado, i.detectado_en, i.cerrado_en,
             i.intentos_erradicacion, u.nombre AS responsable_nombre,
             (SELECT COUNT(*) FROM acciones a
               WHERE a.incidente_id = i.id AND a.estado IN ('pendiente','en_progreso')) AS acciones_abiertas
        FROM incidentes i JOIN usuarios u ON u.id = i.responsable_id
-       ${where}
-      ORDER BY i.id DESC`
-  ).all(...(estado ? [estado] : []));
+      WHERE ($1::estado_incidente IS NULL OR i.estado = $1)
+      ORDER BY i.id DESC`,
+    [estado ?? null]
+  );
 }
 
-export function getIncidentDetail(db, incidentId) {
-  const incident = getIncidentRow(db, incidentId);
-  const responsable = db.prepare('SELECT id, nombre, rol FROM usuarios WHERE id = ?').get(incident.responsable_id);
-
+export async function getIncidentDetail(db, incidentId) {
+  // Consultas secuenciales: dentro de una transacción comparten una sola conexión.
+  const incident = await getIncidentRow(db, incidentId);
   return {
     ...incident,
-    responsable,
-    servicios: listIncidentServices(db, incidentId),
-    acciones: listActions(db, incidentId),
-    decisiones: listDecisions(db, incidentId),
-    historial: listIncidentHistory(db, incidentId),
+    responsable: await db.one('SELECT id, nombre, rol FROM usuarios WHERE id = $1', [incident.responsable_id]),
+    servicios: await listIncidentServices(db, incidentId),
+    acciones: await listActions(db, incidentId),
+    decisiones: await listDecisions(db, incidentId),
+    historial: await listIncidentHistory(db, incidentId),
     siguientePaso: describeNextStep(incident),
   };
 }
@@ -101,83 +103,92 @@ export function getIncidentDetail(db, incidentId) {
 // ---------------------------------------------------------------- efectos del flujo
 
 function linkService(db, incidentId, serviceId) {
-  db.prepare('INSERT OR IGNORE INTO incidente_servicios (incidente_id, servicio_id) VALUES (?, ?)').run(incidentId, serviceId);
+  return db.run(
+    `INSERT INTO incidente_servicios (incidente_id, servicio_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [incidentId, serviceId]
+  );
 }
 
-function resolveAssignee(db, rol, fallbackUserId) {
-  return findUserByRole(db, rol)?.id ?? fallbackUserId;
+async function resolveAssignee(db, rol, fallbackUserId) {
+  return (await findUserByRole(db, rol))?.id ?? fallbackUserId;
 }
 
 const stageEntryOrigin = (stageKey) => `entrada:${stageKey}`;
 
-function createFlowAction(db, incident, etapa, origen, template, usuarioId) {
+async function createFlowAction(db, incident, etapa, origen, template, usuarioId) {
   if (!template) return;
-  insertAction(db, {
+  await insertAction(db, {
     incidenteId: incident.id,
     etapa,
     origen,
     descripcion: template.descripcion,
-    responsableId: resolveAssignee(db, template.rol, incident.responsable_id),
+    responsableId: await resolveAssignee(db, template.rol, incident.responsable_id),
     usuarioId,
   });
 }
 
+/** Aplica un cambio de estado a cada servicio, en orden, dentro de la misma transacción. */
+async function applyToEach(db, services, nuevoEstado, options) {
+  for (const service of services) {
+    await applyServiceStatus(db, service, nuevoEstado, options);
+  }
+}
+
 const SERVICE_EFFECT_HANDLERS = {
-  [SERVICE_EFFECT.STOP_OT]: (db, incident, usuarioId) => {
-    const otServices = db.prepare(`SELECT * FROM servicios WHERE tipo = 'OT'`).all();
-    otServices.forEach((service) => {
-      linkService(db, incident.id, service.id);
-      applyServiceStatus(db, service, 'afectado', {
-        nota: 'Detenido preventivamente (aislamiento TI/OT)',
-        incidenteId: incident.id,
-        usuarioId,
-        evento: 'detencion_preventiva',
-      });
+  [SERVICE_EFFECT.STOP_OT]: async (db, incident, usuarioId) => {
+    const otServices = await db.many(`SELECT * FROM servicios WHERE tipo = 'OT' ORDER BY id FOR UPDATE`);
+    for (const service of otServices) {
+      await linkService(db, incident.id, service.id);
+    }
+    await applyToEach(db, otServices, 'afectado', {
+      nota: 'Detenido preventivamente (aislamiento TI/OT)',
+      incidenteId: incident.id,
+      usuarioId,
+      evento: 'detencion_preventiva',
     });
   },
 
-  [SERVICE_EFFECT.START_RECOVERY]: (db, incident, usuarioId) => {
-    listIncidentServices(db, incident.id)
-      .filter((service) => service.estado === 'afectado')
-      .forEach((service) => applyServiceStatus(db, service, 'en_recuperacion', {
-        nota: 'Reinicio progresivo en curso',
-        incidenteId: incident.id,
-        usuarioId,
-        evento: 'inicio_recuperacion',
-      }));
+  [SERVICE_EFFECT.START_RECOVERY]: async (db, incident, usuarioId) => {
+    const affected = (await listIncidentServices(db, incident.id)).filter((s) => s.estado === 'afectado');
+    await applyToEach(db, affected, 'en_recuperacion', {
+      nota: 'Reinicio progresivo en curso',
+      incidenteId: incident.id,
+      usuarioId,
+      evento: 'inicio_recuperacion',
+    });
   },
 
-  [SERVICE_EFFECT.RESTORE_ALL]: (db, incident, usuarioId) => {
-    listIncidentServices(db, incident.id)
-      .filter((service) => service.estado !== 'operativo')
-      .forEach((service) => applyServiceStatus(db, service, 'operativo', {
-        nota: null,
-        incidenteId: incident.id,
-        usuarioId,
-        evento: 'servicio_restablecido',
-      }));
+  [SERVICE_EFFECT.RESTORE_ALL]: async (db, incident, usuarioId) => {
+    const pending = (await listIncidentServices(db, incident.id)).filter((s) => s.estado !== 'operativo');
+    await applyToEach(db, pending, 'operativo', {
+      nota: null,
+      incidenteId: incident.id,
+      usuarioId,
+      evento: 'servicio_restablecido',
+    });
   },
 };
 
-function applyServiceEffect(db, effect, incident, usuarioId) {
+async function applyServiceEffect(db, effect, incident, usuarioId) {
   if (!effect) return;
-  SERVICE_EFFECT_HANDLERS[effect](db, incident, usuarioId);
+  await SERVICE_EFFECT_HANDLERS[effect](db, incident, usuarioId);
 }
 
 /** Mueve el incidente a una etapa y ejecuta todo lo que esa etapa implica. */
-function enterStage(db, incident, stageKey, usuarioId, extraDetail = null) {
+async function enterStage(db, incident, stageKey, usuarioId, extraDetail = null) {
   const stage = getStage(stageKey);
   const isFinal = stage.tipo === STAGE_TYPE.FINAL;
 
-  db.prepare(
+  await db.run(
     `UPDATE incidentes
-        SET etapa = ?,
-            estado = CASE WHEN ? THEN 'cerrado' ELSE estado END,
-            cerrado_en = CASE WHEN ? THEN datetime('now') ELSE cerrado_en END
-      WHERE id = ?`
-  ).run(stageKey, isFinal ? 1 : 0, isFinal ? 1 : 0, incident.id);
+        SET etapa = $1,
+            estado = CASE WHEN $2 THEN 'cerrado'::estado_incidente ELSE estado END,
+            cerrado_en = CASE WHEN $2 THEN now() ELSE cerrado_en END
+      WHERE id = $3`,
+    [stageKey, isFinal, incident.id]
+  );
 
-  recordHistory(db, {
+  await recordHistory(db, {
     incidenteId: incident.id,
     evento: isFinal ? 'incidente_cerrado' : 'cambio_etapa',
     estadoAnterior: incident.etapa,
@@ -186,12 +197,12 @@ function enterStage(db, incident, stageKey, usuarioId, extraDetail = null) {
     usuarioId,
   });
 
-  createFlowAction(db, incident, stageKey, stageEntryOrigin(stageKey), stage.accionAlEntrar, usuarioId);
-  applyServiceEffect(db, stage.efectoAlEntrar, incident, usuarioId);
+  await createFlowAction(db, incident, stageKey, stageEntryOrigin(stageKey), stage.accionAlEntrar, usuarioId);
+  await applyServiceEffect(db, stage.efectoAlEntrar, incident, usuarioId);
 }
 
-function assertStageActionsClosed(db, incident) {
-  const open = countOpenActions(db, incident.id, incident.etapa);
+async function assertStageActionsClosed(db, incident) {
+  const open = await countOpenActions(db, incident.id, incident.etapa);
   if (open > 0) {
     throw new BusinessRuleError(
       `Hay ${open} acción(es) pendientes en la etapa "${getStage(incident.etapa).nombre}". Complétalas o márcalas como fallidas antes de continuar`
@@ -201,31 +212,29 @@ function assertStageActionsClosed(db, incident) {
 
 // ---------------------------------------------------------------- casos de uso
 
-function nextIncidentCode(db) {
-  const { next } = db.prepare('SELECT COALESCE(MAX(id), 0) + 1 AS next FROM incidentes').get();
+async function nextIncidentCode(db) {
+  const { next } = await db.one('SELECT COALESCE(MAX(id), 0) + 1 AS next FROM incidentes');
   return `INC-${new Date().getFullYear()}-${String(next).padStart(4, '0')}`;
 }
 
 export function createIncident(db, { titulo, descripcion, severidad, responsableId, servicioIds }, user) {
-  return db.transaction(() => {
-    requireActiveUserById(db, responsableId);
+  return db.tx(async (tx) => {
+    await requireActiveUserById(tx, responsableId);
 
     const uniqueServiceIds = [...new Set(servicioIds)];
-    const services = uniqueServiceIds.map((id) => {
-      const service = db.prepare('SELECT * FROM servicios WHERE id = ?').get(id);
-      if (!service) throw new ValidationError(`servicioIds: el servicio ${id} no existe`);
-      return service;
-    });
+    const services = await tx.many(`SELECT * FROM servicios WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE`, [uniqueServiceIds]);
+    const missing = uniqueServiceIds.filter((id) => !services.some((s) => s.id === id));
+    if (missing.length > 0) throw new ValidationError(`servicioIds: el servicio ${missing[0]} no existe`);
 
-    const codigo = nextIncidentCode(db);
-    const { lastInsertRowid } = db.prepare(
+    const codigo = await nextIncidentCode(tx);
+    const { id: incidentId } = await tx.one(
       `INSERT INTO incidentes (codigo, titulo, descripcion, severidad, etapa, responsable_id, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(codigo, titulo, descripcion, severidad, INITIAL_STAGE, responsableId, user.id);
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [codigo, titulo, descripcion, severidad, INITIAL_STAGE, responsableId, user.id]
+    );
+    const incident = await getIncidentRow(tx, incidentId);
 
-    const incident = getIncidentRow(db, Number(lastInsertRowid));
-
-    recordHistory(db, {
+    await recordHistory(tx, {
       incidenteId: incident.id,
       evento: 'incidente_registrado',
       estadoNuevo: INITIAL_STAGE,
@@ -233,28 +242,26 @@ export function createIncident(db, { titulo, descripcion, severidad, responsable
       usuarioId: user.id,
     });
 
-    services.forEach((service) => {
-      linkService(db, incident.id, service.id);
-      if (service.estado === 'operativo') {
-        applyServiceStatus(db, service, 'afectado', {
-          nota: `Afectado por ${codigo}`,
-          incidenteId: incident.id,
-          usuarioId: user.id,
-          evento: 'servicio_afectado',
-        });
-      }
+    for (const service of services) {
+      await linkService(tx, incident.id, service.id);
+    }
+    await applyToEach(tx, services.filter((s) => s.estado === 'operativo'), 'afectado', {
+      nota: `Afectado por ${codigo}`,
+      incidenteId: incident.id,
+      usuarioId: user.id,
+      evento: 'servicio_afectado',
     });
 
-    createFlowAction(
-      db, incident, INITIAL_STAGE, stageEntryOrigin(INITIAL_STAGE), getStage(INITIAL_STAGE).accionAlEntrar, user.id
+    await createFlowAction(
+      tx, incident, INITIAL_STAGE, stageEntryOrigin(INITIAL_STAGE), getStage(INITIAL_STAGE).accionAlEntrar, user.id
     );
-    return getIncidentDetail(db, incident.id);
-  })();
+    return getIncidentDetail(tx, incident.id);
+  });
 }
 
 export function advanceIncident(db, incidentId, { leccionesAprendidas } = {}, user) {
-  return db.transaction(() => {
-    const incident = getOpenIncidentRow(db, incidentId);
+  return db.tx(async (tx) => {
+    const incident = await lockOpenIncident(tx, incidentId);
     assertCanAdvance(user, incident);
 
     const stage = getStage(incident.etapa);
@@ -263,7 +270,7 @@ export function advanceIncident(db, incidentId, { leccionesAprendidas } = {}, us
         `La etapa "${stage.nombre}" requiere tomar la decisión ${stage.decision}; no se puede avanzar directamente`
       );
     }
-    assertStageActionsClosed(db, incident);
+    await assertStageActionsClosed(tx, incident);
 
     if (stage.requiereLecciones) {
       const lessons = leccionesAprendidas?.trim() ?? '';
@@ -272,49 +279,47 @@ export function advanceIncident(db, incidentId, { leccionesAprendidas } = {}, us
           `leccionesAprendidas: se requieren al menos ${MIN_LESSONS_LENGTH} caracteres para cerrar el incidente`
         );
       }
-      const openActions = countOpenActions(db, incident.id);
+      const openActions = await countOpenActions(tx, incident.id);
       if (openActions > 0) {
         throw new BusinessRuleError(`No se puede cerrar: quedan ${openActions} acción(es) abiertas en el incidente`);
       }
-      db.prepare('UPDATE incidentes SET lecciones_aprendidas = ? WHERE id = ?').run(lessons, incident.id);
+      await tx.run('UPDATE incidentes SET lecciones_aprendidas = $1 WHERE id = $2', [lessons, incident.id]);
     }
 
     const detail = stage.esReintento
       ? `Reintento de erradicación #${incident.intentos_erradicacion + 1}`
       : null;
-    enterStage(db, incident, stage.siguiente, user.id, detail);
-    return getIncidentDetail(db, incident.id);
-  })();
+    await enterStage(tx, incident, stage.siguiente, user.id, detail);
+    return getIncidentDetail(tx, incident.id);
+  });
 }
 
 /**
  * El intento actual de erradicación empieza en la última acción de entrada a la etapa;
  * si cualquier acción de ese intento falló, el sistema no puede declararse seguro.
  */
-function assertCurrentEradicationSucceeded(db, incident) {
-  const attemptStart = db.prepare(
-    `SELECT MAX(id) AS id FROM acciones WHERE incidente_id = ? AND origen = ?`
-  ).get(incident.id, stageEntryOrigin('erradicacion')).id;
-
-  const failed = db.prepare(
+async function assertCurrentEradicationSucceeded(db, incident) {
+  const { total } = await db.one(
     `SELECT COUNT(*) AS total FROM acciones
-      WHERE incidente_id = ? AND etapa = 'erradicacion' AND id >= ? AND estado = 'fallida'`
-  ).get(incident.id, attemptStart ?? 0).total;
+      WHERE incidente_id = $1 AND etapa = 'erradicacion' AND estado = 'fallida'
+        AND id >= COALESCE((SELECT MAX(id) FROM acciones WHERE incidente_id = $1 AND origen = $2), 0)`,
+    [incident.id, stageEntryOrigin('erradicacion')]
+  );
 
-  if (failed > 0) {
+  if (total > 0) {
     throw new BusinessRuleError(
       'No se puede validar el reinicio: hay acciones fallidas en el intento actual de erradicación. Responde "No" para ir a análisis forense'
     );
   }
 }
 
-function registerFailedEradication(db, incident, usuarioId) {
+async function registerFailedEradication(db, incident, usuarioId) {
   const attempts = incident.intentos_erradicacion + 1;
-  db.prepare('UPDATE incidentes SET intentos_erradicacion = ? WHERE id = ?').run(attempts, incident.id);
+  await db.run('UPDATE incidentes SET intentos_erradicacion = $1 WHERE id = $2', [attempts, incident.id]);
 
   if (attempts >= MAX_ERADICATION_ATTEMPTS && incident.severidad !== 'critica') {
-    db.prepare(`UPDATE incidentes SET severidad = 'critica' WHERE id = ?`).run(incident.id);
-    recordHistory(db, {
+    await db.run(`UPDATE incidentes SET severidad = 'critica' WHERE id = $1`, [incident.id]);
+    await recordHistory(db, {
       incidenteId: incident.id,
       evento: 'escalamiento',
       estadoAnterior: incident.severidad,
@@ -326,8 +331,8 @@ function registerFailedEradication(db, incident, usuarioId) {
 }
 
 export function decideIncident(db, incidentId, { codigo, respuesta, justificacion }, user) {
-  return db.transaction(() => {
-    const incident = getOpenIncidentRow(db, incidentId);
+  return db.tx(async (tx) => {
+    const incident = await lockOpenIncident(tx, incidentId);
     assertCanDecide(user);
 
     const stage = getStage(incident.etapa);
@@ -337,22 +342,23 @@ export function decideIncident(db, incidentId, { codigo, respuesta, justificacio
     if (codigo && codigo !== stage.decision) {
       throw new BusinessRuleError(`La decisión pendiente es ${stage.decision}, no ${codigo}`);
     }
-    assertStageActionsClosed(db, incident);
+    await assertStageActionsClosed(tx, incident);
 
     const decisionCode = stage.decision;
     if (decisionCode === 'D3' && respuesta) {
-      assertCurrentEradicationSucceeded(db, incident);
+      await assertCurrentEradicationSucceeded(tx, incident);
     }
 
     const decision = DECISIONS[decisionCode];
     const branch = getBranch(decisionCode, respuesta);
 
-    db.prepare(
+    await tx.run(
       `INSERT INTO decisiones (incidente_id, codigo, pregunta, respuesta, justificacion, etapa_origen, etapa_destino, usuario_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(incident.id, decisionCode, decision.pregunta, respuesta ? 1 : 0, justificacion, incident.etapa, branch.destino, user.id);
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [incident.id, decisionCode, decision.pregunta, respuesta, justificacion, incident.etapa, branch.destino, user.id]
+    );
 
-    recordHistory(db, {
+    await recordHistory(tx, {
       incidenteId: incident.id,
       evento: 'decision',
       estadoAnterior: incident.etapa,
@@ -362,12 +368,12 @@ export function decideIncident(db, incidentId, { codigo, respuesta, justificacio
     });
 
     if (branch.cuentaComoIntentoFallido) {
-      registerFailedEradication(db, incident, user.id);
+      await registerFailedEradication(tx, incident, user.id);
     }
-    applyServiceEffect(db, branch.efecto, incident, user.id);
-    enterStage(db, incident, branch.destino, user.id);
-    createFlowAction(db, incident, branch.destino, `${decisionCode}:${respuesta ? 'si' : 'no'}`, branch.accion, user.id);
+    await applyServiceEffect(tx, branch.efecto, incident, user.id);
+    await enterStage(tx, incident, branch.destino, user.id);
+    await createFlowAction(tx, incident, branch.destino, `${decisionCode}:${respuesta ? 'si' : 'no'}`, branch.accion, user.id);
 
-    return getIncidentDetail(db, incident.id);
-  })();
+    return getIncidentDetail(tx, incident.id);
+  });
 }

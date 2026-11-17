@@ -1,0 +1,23 @@
+# PostgreSQL 16 para desarrollo y la demo:  docker compose up -d
+# Crea el rol "contingencia", la base "contingencia" y la base de pruebas "contingencia_test".
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: contingencia-postgres
+    environment:
+      POSTGRES_USER: contingencia
+      POSTGRES_PASSWORD: contingencia
+      POSTGRES_DB: contingencia
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/docker-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contingencia -d contingencia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

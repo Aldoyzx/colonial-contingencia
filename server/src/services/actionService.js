@@ -16,48 +16,51 @@ const ACTION_TRANSITIONS = Object.freeze({
 /**
  * @param origen 'manual', 'entrada:<etapa>' o '<Dn>:si|no'; permite saber qué nodo del flujo generó la acción.
  */
-export function insertAction(db, { incidenteId, etapa, origen = 'manual', descripcion, responsableId, usuarioId }) {
-  const { lastInsertRowid } = db.prepare(
-    `INSERT INTO acciones (incidente_id, etapa, origen, descripcion, responsable_id) VALUES (?, ?, ?, ?, ?)`
-  ).run(incidenteId, etapa, origen, descripcion, responsableId);
+export async function insertAction(db, { incidenteId, etapa, origen = 'manual', descripcion, responsableId, usuarioId }) {
+  const { id } = await db.one(
+    `INSERT INTO acciones (incidente_id, etapa, origen, descripcion, responsable_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [incidenteId, etapa, origen, descripcion, responsableId]
+  );
 
-  recordHistory(db, {
+  await recordHistory(db, {
     incidenteId,
     evento: 'accion_asignada',
     estadoNuevo: 'pendiente',
     detalle: descripcion,
     usuarioId,
   });
-  return Number(lastInsertRowid);
+  return id;
 }
 
 export function listActions(db, incidenteId) {
-  return db.prepare(
+  return db.many(
     `SELECT a.*, u.nombre AS responsable_nombre, u.rol AS responsable_rol
        FROM acciones a JOIN usuarios u ON u.id = a.responsable_id
-      WHERE a.incidente_id = ?
-      ORDER BY a.id`
-  ).all(incidenteId);
+      WHERE a.incidente_id = $1
+      ORDER BY a.id`,
+    [incidenteId]
+  );
 }
 
-export function countOpenActions(db, incidenteId, etapa = null) {
-  const placeholders = OPEN_ACTION_STATES.map(() => '?').join(',');
-  const stageFilter = etapa ? 'AND etapa = ?' : '';
-  const params = [incidenteId, ...OPEN_ACTION_STATES, ...(etapa ? [etapa] : [])];
-  return db.prepare(
+export async function countOpenActions(db, incidenteId, etapa = null) {
+  const { total } = await db.one(
     `SELECT COUNT(*) AS total FROM acciones
-      WHERE incidente_id = ? AND estado IN (${placeholders}) ${stageFilter}`
-  ).get(...params).total;
+      WHERE incidente_id = $1 AND estado = ANY($2::estado_accion[]) AND ($3::varchar IS NULL OR etapa = $3)`,
+    [incidenteId, OPEN_ACTION_STATES, etapa]
+  );
+  return total;
 }
 
-function getAction(db, actionId) {
-  const action = db.prepare('SELECT * FROM acciones WHERE id = ?').get(actionId);
+async function getAction(db, actionId, { forUpdate = false } = {}) {
+  const action = await db.one(`SELECT * FROM acciones WHERE id = $1${forUpdate ? ' FOR UPDATE' : ''}`, [actionId]);
   if (!action) throw new NotFoundError('Acción', actionId);
   return action;
 }
 
-function getOpenIncident(db, incidenteId) {
-  const incident = db.prepare('SELECT * FROM incidentes WHERE id = ?').get(incidenteId);
+async function getOpenIncident(db, incidenteId) {
+  // FOR UPDATE serializa los cambios concurrentes sobre el mismo incidente.
+  const incident = await db.one('SELECT * FROM incidentes WHERE id = $1 FOR UPDATE', [incidenteId]);
   if (!incident) throw new NotFoundError('Incidente', incidenteId);
   if (incident.estado !== 'abierto') throw new BusinessRuleError('El incidente está cerrado');
   return incident;
@@ -65,24 +68,25 @@ function getOpenIncident(db, incidenteId) {
 
 /** Acción manual adicional en la etapa actual del incidente. */
 export function createAction(db, incidenteId, { descripcion, responsableId }, user) {
-  return db.transaction(() => {
-    const incident = getOpenIncident(db, incidenteId);
-    requireActiveUserById(db, responsableId);
-    const id = insertAction(db, {
+  return db.tx(async (tx) => {
+    const incident = await getOpenIncident(tx, incidenteId);
+    await requireActiveUserById(tx, responsableId);
+    const id = await insertAction(tx, {
       incidenteId,
       etapa: incident.etapa,
       descripcion,
       responsableId,
       usuarioId: user.id,
     });
-    return getAction(db, id);
-  })();
+    return getAction(tx, id);
+  });
 }
 
 export function updateAction(db, actionId, { estado, resultado }, user) {
-  return db.transaction(() => {
-    const action = getAction(db, actionId);
-    getOpenIncident(db, action.incidente_id);
+  return db.tx(async (tx) => {
+    const { incidente_id: incidenteId } = await getAction(tx, actionId);
+    await getOpenIncident(tx, incidenteId);
+    const action = await getAction(tx, actionId, { forUpdate: true });
     assertCanUpdateAction(user, action);
 
     if (!ACTION_TRANSITIONS[action.estado].includes(estado)) {
@@ -92,11 +96,12 @@ export function updateAction(db, actionId, { estado, resultado }, user) {
       throw new ValidationError('resultado: es obligatorio explicar por qué falló la acción');
     }
 
-    db.prepare(
-      `UPDATE acciones SET estado = ?, resultado = COALESCE(?, resultado), actualizada_en = datetime('now') WHERE id = ?`
-    ).run(estado, resultado ?? null, actionId);
+    await tx.run(
+      `UPDATE acciones SET estado = $1, resultado = COALESCE($2, resultado), actualizada_en = now() WHERE id = $3`,
+      [estado, resultado ?? null, actionId]
+    );
 
-    recordHistory(db, {
+    await recordHistory(tx, {
       incidenteId: action.incidente_id,
       evento: 'accion_actualizada',
       estadoAnterior: action.estado,
@@ -104,6 +109,6 @@ export function updateAction(db, actionId, { estado, resultado }, user) {
       detalle: resultado ? `${action.descripcion} — ${resultado}` : action.descripcion,
       usuarioId: user.id,
     });
-    return getAction(db, actionId);
-  })();
+    return getAction(tx, actionId);
+  });
 }

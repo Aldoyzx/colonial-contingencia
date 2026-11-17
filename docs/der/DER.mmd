@@ -1,0 +1,127 @@
+erDiagram
+  usuarios ||--o{ incidentes : "registra"
+  incidentes ||--o{ incidente_servicios : "afecta"
+  servicios ||--o{ incidente_servicios : "es afectado"
+  incidentes ||--o{ acciones : "tiene"
+  etapas ||--o{ acciones : "pertenece"
+  usuarios ||--o{ acciones : "ejecuta"
+  incidentes ||--o{ decisiones : "registra"
+  decisiones_plan ||--o{ decisiones : "instancia de"
+  etapas ||--o{ decisiones : "origen"
+  etapas ||--o{ decisiones : "destino"
+  usuarios ||--o{ decisiones : "toma"
+  incidentes |o--o{ historial_recuperacion : "audita"
+  servicios |o--o{ historial_recuperacion : "audita"
+  usuarios ||--o{ historial_recuperacion : "realiza"
+  etapas |o--o{ etapas : "siguiente"
+  etapas ||--o{ decisiones_plan : "se resuelve en"
+  etapas ||--o{ decisiones_plan : "si"
+  etapas ||--o{ decisiones_plan : "no"
+  etapas ||--o{ etapa_recursos : "requiere"
+  recursos_tecnologicos ||--o{ etapa_recursos : "se usa en"
+  etapas ||--o{ incidentes : "está en"
+  usuarios ||--o{ incidentes : "responsable"
+  usuarios {
+    integer id PK
+    varchar_100 nombre
+    varchar_120 email UK
+    rol_usuario rol
+    boolean activo
+    timestamptz creado_en
+  }
+  incidentes {
+    integer id PK
+    varchar_20 codigo UK
+    varchar_120 titulo
+    text descripcion
+    severidad_incidente severidad
+    varchar_30 etapa FK
+    estado_incidente estado
+    smallint intentos_erradicacion
+    text lecciones_aprendidas
+    integer responsable_id FK
+    integer creado_por FK
+    timestamptz detectado_en
+    timestamptz cerrado_en
+  }
+  servicios {
+    integer id PK
+    varchar_12 codigo UK
+    varchar_100 nombre
+    tipo_servicio tipo
+    smallint criticidad
+    estado_servicio estado
+    varchar_300 nota_estado
+    text descripcion
+    timestamptz actualizado_en
+  }
+  incidente_servicios {
+    integer incidente_id PK,FK
+    integer servicio_id PK,FK
+    timestamptz vinculado_en
+  }
+  acciones {
+    integer id PK
+    integer incidente_id FK
+    varchar_30 etapa FK
+    varchar_40 origen
+    varchar_500 descripcion
+    integer responsable_id FK
+    estado_accion estado
+    varchar_1000 resultado
+    timestamptz creada_en
+    timestamptz actualizada_en
+  }
+  decisiones {
+    integer id PK
+    integer incidente_id FK
+    char_2 codigo FK
+    varchar_200 pregunta
+    boolean respuesta
+    varchar_1000 justificacion
+    varchar_30 etapa_origen FK
+    varchar_30 etapa_destino FK
+    integer usuario_id FK
+    timestamptz tomada_en
+  }
+  historial_recuperacion {
+    bigint id PK
+    integer incidente_id FK
+    integer servicio_id FK
+    varchar_40 evento
+    varchar_30 estado_anterior
+    varchar_30 estado_nuevo
+    text detalle
+    integer usuario_id FK
+    timestamptz fecha
+  }
+  etapas {
+    varchar_30 clave PK
+    varchar_60 nombre
+    numeric_3_1 orden UK
+    tipo_etapa tipo
+    text procedimiento
+    rol_usuario rol_responsable
+    varchar_30 siguiente FK
+    boolean es_reintento
+  }
+  decisiones_plan {
+    char_2 codigo PK
+    varchar_30 etapa FK,UK
+    varchar_200 pregunta
+    varchar_30 destino_si FK
+    varchar_30 destino_no FK
+    text accion_si
+    text accion_no
+  }
+  etapa_recursos {
+    varchar_30 etapa PK,FK
+    integer recurso_id PK,FK
+  }
+  recursos_tecnologicos {
+    integer id PK
+    varchar_10 codigo UK
+    varchar_120 nombre
+    categoria_recurso categoria
+    text descripcion
+  }

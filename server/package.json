@@ -1,22 +1,24 @@
 {
   "name": "colonial-contingencia-server",
   "version": "1.0.0",
-  "description": "API del sistema de gestión de contingencia ante ransomware (caso Colonial Pipeline 2021)",
+  "description": "API del sistema de gestión de contingencia ante ransomware (caso Colonial Pipeline 2021) sobre PostgreSQL",
   "type": "module",
   "main": "src/index.js",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "node --test \"test/**/*.test.js\"",
-    "reset-db": "node src/db/reset.js"
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "test": "node --env-file-if-exists=.env --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "db:reset": "node --env-file-if-exists=.env src/db/reset.js",
+    "db:demo": "node --env-file-if-exists=.env src/db/reset.js --demo",
+    "db:generate-seed": "node scripts/generate-seed-sql.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "express": "^4.21.2",
-    "helmet": "^8.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "pg": "^8.16.3",
     "zod": "^4.6.7"
   }
 }

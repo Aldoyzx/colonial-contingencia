@@ -1,38 +1,63 @@
-import { createDatabase } from '../src/db/connection.js';
+import { readFile } from 'node:fs/promises';
+import { SQL_FILES } from '../src/db/files.js';
+import { resetDatabase } from '../src/db/migrate.js';
+import { createDb } from '../src/db/pool.js';
 import { updateAction } from '../src/services/actionService.js';
 import { getActiveUser } from '../src/services/userService.js';
 
-export function setup() {
-  const db = createDatabase(':memory:');
+const TEST_DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? 'postgres://contingencia:contingencia@localhost:5432/contingencia_test';
+
+// allowExitOnIdle: el proceso de pruebas termina solo cuando no quedan consultas pendientes.
+const db = createDb(TEST_DATABASE_URL, { allowExitOnIdle: true, max: 4 });
+let schemaReady = false;
+
+const DATA_TABLES = 'historial_recuperacion, decisiones, acciones, incidente_servicios, incidentes, servicios, usuarios';
+
+/** Base limpia para cada prueba: el esquema se crea una vez y luego solo se vacían los datos. */
+async function freshDatabase() {
+  if (!schemaReady) {
+    await resetDatabase(db);
+    schemaReady = true;
+    return;
+  }
+  await db.query(`TRUNCATE ${DATA_TABLES} RESTART IDENTITY CASCADE`);
+  await db.query(await readFile(SQL_FILES.seed, 'utf8'));
+}
+
+export async function setup() {
+  await freshDatabase();
   const users = {
-    coordinador: getActiveUser(db, 1),
-    analistaTi: getActiveUser(db, 2),
-    operadorOt: getActiveUser(db, 3),
-    legal: getActiveUser(db, 4),
-    comunicaciones: getActiveUser(db, 5),
+    coordinador: await getActiveUser(db, 1),
+    analistaTi: await getActiveUser(db, 2),
+    operadorOt: await getActiveUser(db, 3),
+    legal: await getActiveUser(db, 4),
+    comunicaciones: await getActiveUser(db, 5),
   };
   return { db, users };
 }
 
-export function serviceByCode(db, codigo) {
-  return db.prepare('SELECT * FROM servicios WHERE codigo = ?').get(codigo);
+export function serviceByCode(dbConn, codigo) {
+  return dbConn.one('SELECT * FROM servicios WHERE codigo = $1', [codigo]);
 }
 
-export function serviceIds(db, ...codes) {
-  return codes.map((code) => serviceByCode(db, code).id);
+export async function serviceIds(dbConn, ...codes) {
+  const rows = await dbConn.many('SELECT id, codigo FROM servicios WHERE codigo = ANY($1)', [codes]);
+  return codes.map((code) => rows.find((r) => r.codigo === code).id);
 }
 
 /** Marca como completadas (o fallidas) todas las acciones abiertas de la etapa actual. */
-export function closeStageActions(db, detail, user, { estado = 'completada', resultado = 'Ejecutado' } = {}) {
-  detail.acciones
-    .filter((a) => a.etapa === detail.etapa && ['pendiente', 'en_progreso'].includes(a.estado))
-    .forEach((a) => updateAction(db, a.id, { estado, resultado }, user));
+export async function closeStageActions(dbConn, detail, user, { estado = 'completada', resultado = 'Ejecutado' } = {}) {
+  const open = detail.acciones.filter((a) => a.etapa === detail.etapa && ['pendiente', 'en_progreso'].includes(a.estado));
+  for (const action of open) {
+    await updateAction(dbConn, action.id, { estado, resultado }, user);
+  }
 }
 
-export const baseIncident = (db) => ({
+export const baseIncident = async (dbConn) => ({
   titulo: 'Ransomware DarkSide en red corporativa',
   descripcion: 'Nota de rescate en servidores de facturación; actividad anómala desde la VPN.',
   severidad: 'alta',
   responsableId: 1,
-  servicioIds: serviceIds(db, 'TI-FACT', 'TI-VPN', 'TI-ERP'),
+  servicioIds: await serviceIds(dbConn, 'TI-FACT', 'TI-VPN', 'TI-ERP'),
 });

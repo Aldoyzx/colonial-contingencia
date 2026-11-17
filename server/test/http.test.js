@@ -8,7 +8,7 @@ describe('API HTTP', () => {
   let baseUrl;
 
   before(async () => {
-    const { db } = setup();
+    const { db } = await setup();
     server = createApp(db).listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${server.address().port}/api`;

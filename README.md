@@ -1,150 +1,139 @@
 # Centro de Contingencia — Colonial Pipeline (2021)
 
-Prototipo funcional para gestionar la respuesta a un ataque de ransomware sobre
-infraestructura crítica. Implementa el diagrama de flujo del plan de contingencia como una
-máquina de estados: las etapas, las decisiones D1–D4, las rutas alternativas y el
-reintento. Incluye un panel de estado de servicios (operativo / afectado / en
-recuperación).
+Sistema web para gestionar la respuesta a un ataque de ransomware sobre infraestructura
+crítica. Implementa el diagrama de flujo del plan de contingencia como una máquina de
+estados (etapas, decisiones D1–D4, ruta alternativa y reintento) e incluye el panel de
+estado de servicios diseñado en Figma (operativo / afectado / en recuperación).
+
+| Capa | Tecnología |
+|---|---|
+| Diseño | Figma (4 pantallas: normal, crisis, recuperación y móvil) |
+| Frontend | React 19 + Vite 8, CSS con los tokens de Figma |
+| Backend | Node.js 22 + Express 5, validación con zod, cabeceras con helmet |
+| Base de datos | **PostgreSQL 16** (driver `pg`) |
+| Control de versiones | Git + GitHub |
 
 ## Requisitos
 
-- **Node.js 22 o superior** (`node -v`)
-- npm 10 o superior
+- **Node.js 22 o superior** y npm 10
+- **PostgreSQL 16**, con una de estas dos opciones:
+  - Docker Desktop: `docker compose up -d` (recomendado; crea todo solo)
+  - PostgreSQL instalado (pgAdmin en Windows): ejecutar `database/00_crear_base_de_datos.sql`
 
-No hace falta instalar un motor de base de datos: SQLite se guarda en un archivo
-(`server/data/contingencia.db`) que se crea solo la primera vez.
-
-## Instalación
+## Puesta en marcha
 
 ```bash
+# 1. Base de datos
+docker compose up -d
+#    o, con PostgreSQL instalado:
+#    psql -U postgres -f database/00_crear_base_de_datos.sql
+
+# 2. Dependencias
 cd server && npm install
 cd ../client && npm install
+
+# 3. Ejecutar (modo presentación: un solo proceso en http://localhost:4000)
+cd ../client && npm run build
+cd ../server && npm run db:demo     # esquema + datos iniciales + incidente de prueba de 2021
+npm start
 ```
 
-## Ejecución
+Al arrancar, el servidor crea el esquema si la base está vacía. Para desarrollo con recarga
+en caliente usa dos terminales: `cd server && npm run dev` y `cd client && npm run dev`
+(abre http://localhost:5173).
 
-**Modo desarrollo** (dos terminales, con recarga en caliente):
+Variables de entorno (copiar `server/.env.example` como `server/.env`): `PORT` y
+`DATABASE_URL` (por defecto `postgres://contingencia:contingencia@localhost:5432/contingencia`).
 
-```bash
-# Terminal 1 — API en http://localhost:4000
-cd server && npm run dev
+| Comando (en `server/`) | Qué hace |
+|---|---|
+| `npm test` | Pruebas automatizadas contra la base `contingencia_test` |
+| `npm run db:reset` | Recrea el esquema con los datos iniciales |
+| `npm run db:demo` | Igual que `db:reset` y además carga el incidente real de mayo de 2021 |
+| `npm run db:generate-seed` | Regenera `database/02_datos_iniciales.sql` desde el código |
 
-# Terminal 2 — interfaz en http://localhost:5173 (redirige /api al puerto 4000)
-cd client && npm run dev
+## Base de datos
+
+Los scripts entregables están en `database/` y son la única fuente del esquema: el
+servidor ejecuta esos mismos archivos.
+
+| Script | Contenido |
+|---|---|
+| `00_crear_base_de_datos.sql` | Rol `contingencia` y bases `contingencia` / `contingencia_test` |
+| `01_esquema.sql` | 8 tipos ENUM, 11 tablas, PK, FK, UNIQUE, CHECK, índices y 3 vistas |
+| `02_datos_iniciales.sql` | Catálogo del plan (10 etapas, D1–D4, 15 recursos), 5 usuarios y 10 servicios |
+| `03_verificacion.sql` | Consultas que listan tablas, restricciones, relaciones y vistas |
+| `04_datos_prueba.sql` | Incidente INC-2021-0001 completo (acciones, decisiones e historial) |
+
+Diagrama entidad-relación: `docs/der/DER.png` (fuente Mermaid en `DER.mmd`).
+
+| Tabla | Propósito |
+|---|---|
+| `etapas` | Nodos del plan: orden, tipo, procedimiento, rol responsable y etapa siguiente |
+| `decisiones_plan` | Rombos D1–D4 con su pregunta y destinos Sí / No |
+| `recursos_tecnologicos` / `etapa_recursos` | Recursos que necesita cada etapa (N:M) |
+| `usuarios` | Actores del plan y su rol |
+| `servicios` | Activos TI/OT, criticidad y estado actual |
+| `incidentes` | Incidente, etapa actual (FK a `etapas`), severidad, intentos y lecciones |
+| `incidente_servicios` | Servicios afectados por incidente (N:M) |
+| `acciones` | Tareas de respuesta, responsable, resultado y nodo de origen |
+| `decisiones` | D1–D4 tomadas, con justificación, etapa origen y destino |
+| `historial_recuperacion` | Bitácora de auditoría |
+
+Restricciones destacadas: el prefijo del código de servicio debe coincidir con su tipo;
+un incidente cerrado exige etapa final, fecha y lecciones (mínimo 20 caracteres); una
+acción fallida exige resultado; D1, D2 y D4 se toman una sola vez por incidente (índice
+único parcial); los servicios vinculados a incidentes no se pueden borrar.
+
+## Arquitectura
+
+```
+client/ (React + Vite)                 server/ (Node + Express 5)              PostgreSQL 16
+  Dashboard ── polling 10 s ──┐          http/app.js      rutas y errores
+  IncidentDetail              ├─ /api ─► http/schemas.js  validación (zod)
+  IncidentForm / List         ┘          services/*       casos de uso ──── transacción ──► tablas
+                                         domain/flow.js   máquina de estados del plan      vistas
 ```
 
-**Modo presentación** (un solo proceso):
-
-```bash
-cd client && npm run build
-cd ../server && npm start        # abre http://localhost:4000
-```
-
-Otros comandos útiles:
-
-```bash
-cd server && npm test            # 16 pruebas: los 3 escenarios, reglas de negocio y HTTP
-cd server && npm run reset-db    # vuelve la BD a su estado inicial antes de la demo
-```
-
-Variables de entorno opcionales: `PORT` (por defecto 4000) y `DB_PATH`.
+- `domain/flow.js` es la fuente de verdad del diagrama; `02_datos_iniciales.sql` se genera
+  a partir de él y una prueba comprueba que la base y el código coinciden.
+- Cada caso de uso corre en **una transacción** con `SELECT … FOR UPDATE` sobre el
+  incidente: dos usuarios no pueden decidir a la vez sobre el mismo incidente.
 
 ## Usuarios de prueba
-
-Se eligen en el selector de la barra superior. No hay contraseñas porque es un prototipo
-(ver la sección de seguridad).
 
 | Usuario | Rol | Puede |
 |---|---|---|
 | María Torres | Coordinador de respuesta | Decidir D1–D4, avanzar, cerrar y cambiar cualquier servicio |
 | Javier Ríos | Analista TI | Actualizar sus acciones y cambiar servicios TI |
-| Lucía Paredes | Operador OT | Actualizar sus acciones y cambiar servicios OT (tramos y SCADA) |
+| Lucía Paredes | Operador OT | Actualizar sus acciones y cambiar servicios OT |
 | Andrés Salinas | Asesoría legal | Actualizar sus acciones (evaluación del rescate) |
-| Carla Méndez | Comunicaciones | Actualizar sus acciones (ruta alternativa y comunicación pública) |
-
-## Arquitectura
-
-```
-client/ (React 19 + Vite 8)            server/ (Node + Express + SQLite)
-  Dashboard ── polling 10 s ──┐          http/app.js       rutas, auth, errores
-  IncidentDetail              ├─ /api ─► http/schemas.js   validación (zod)
-  IncidentForm / List         ┘          services/*        casos de uso (transacciones)
-                                         domain/flow.js    máquina de estados del plan
-                                         domain/permissions.js
-                                         db/schema.sql     modelo de datos
-```
-
-- **`domain/flow.js`** es la única fuente de verdad del diagrama. Cada etapa declara su
-  tipo (acción o decisión), la acción que se asigna al entrar y su efecto sobre los
-  servicios. Cada decisión declara sus ramas Sí/No. El servidor es la autoridad: el
-  cliente solo replica etiquetas y transiciones para habilitar o deshabilitar botones, y
-  `/api/flujo` expone la definición completa del flujo.
-- Cada caso de uso corre dentro de una **transacción SQLite**: una decisión, sus acciones,
-  los cambios de estado y el historial se guardan juntos, o no se guarda nada.
-- `historial_recuperacion` es la bitácora de auditoría: cada cambio de etapa, decisión,
-  acción y estado de servicio queda registrado con su usuario y su fecha.
-
-### Modelo de datos
-
-| Tabla | Propósito |
-|---|---|
-| `usuarios` | Actores y su rol |
-| `servicios` | Activos TI/OT, con su criticidad y estado actual |
-| `incidentes` | Incidente, etapa actual del flujo, severidad, intentos de erradicación y lecciones aprendidas |
-| `incidente_servicios` | Relación N:M entre incidentes y servicios afectados |
-| `acciones` | Tareas de respuesta: etapa, origen (nodo del flujo), responsable y resultado |
-| `decisiones` | D1–D4 tomadas, con respuesta, justificación, etapa de origen y de destino |
-| `historial_recuperacion` | Auditoría de todos los eventos |
-
-### Reglas de negocio
-
-1. No se puede avanzar ni decidir mientras haya acciones pendientes en la etapa actual.
-2. Solo el coordinador toma decisiones; para avanzar hace falta ser el coordinador o el
-   responsable del incidente.
-3. D1 = Sí detiene preventivamente todos los servicios OT y los vincula al incidente.
-4. D3 = Sí se rechaza si alguna acción del intento actual de erradicación falló.
-5. D3 = No suma un intento fallido; al tercero, la severidad sube a crítica.
-6. Una acción fallida exige explicar el motivo. Las acciones cerradas no se pueden modificar.
-7. Un servicio no puede pasar de "afectado" a "operativo" sin pasar antes por "en
-   recuperación". Cada rol solo cambia los servicios de su dominio (TI u OT).
-8. Para cerrar el incidente se exigen lecciones aprendidas (mínimo 20 caracteres) y que
-   no quede ninguna acción abierta.
+| Carla Méndez | Comunicaciones | Actualizar sus acciones (ruta alternativa) |
 
 ## API
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/usuarios` | Usuarios activos (sin autenticación) |
-| GET | `/api/flujo` | Definición del flujo (etapas y decisiones) |
-| GET | `/api/dashboard` | Resumen, servicios por tipo, incidentes abiertos y eventos |
-| GET | `/api/servicios` | Lista de servicios |
+| GET | `/api/health` | Estado de la API y de la conexión a PostgreSQL |
+| GET | `/api/usuarios` | Usuarios activos |
+| GET | `/api/flujo` | Definición del flujo |
+| GET | `/api/dashboard` | Resumen, servicios, incidentes abiertos y eventos |
 | PATCH | `/api/servicios/:id/estado` | Cambio manual de estado `{ estado, nota? }` |
-| GET | `/api/incidentes?estado=abierto\|cerrado` | Lista de incidentes |
-| POST | `/api/incidentes` | Registrar `{ titulo, descripcion, severidad, responsableId, servicioIds[] }` |
+| GET/POST | `/api/incidentes` | Listar (`?estado=`) o registrar incidentes |
 | GET | `/api/incidentes/:id` | Detalle con acciones, decisiones, historial y siguiente paso |
-| POST | `/api/incidentes/:id/avanzar` | Avanzar en una etapa de acción `{ leccionesAprendidas? }` |
-| POST | `/api/incidentes/:id/decisiones` | Decidir `{ respuesta: boolean, justificacion }` |
-| POST | `/api/incidentes/:id/acciones` | Acción manual `{ descripcion, responsableId }` |
-| PATCH | `/api/acciones/:id` | Actualizar `{ estado, resultado? }` |
+| POST | `/api/incidentes/:id/avanzar` | Avanzar en una etapa de acción |
+| POST | `/api/incidentes/:id/decisiones` | Decidir `{ respuesta, justificacion }` |
+| POST | `/api/incidentes/:id/acciones` | Acción manual |
+| PATCH | `/api/acciones/:id` | Actualizar estado y resultado |
 
-Todas las rutas, excepto `usuarios`, `flujo` y `health`, requieren la cabecera
-`X-User-Id`. Los errores siguen el formato `{ error: { code, message, details? } }`, con
-estos códigos: 400 validación, 401 sin usuario, 403 permiso, 404 no existe y 409 regla
-de negocio.
+Las rutas protegidas exigen la cabecera `X-User-Id`. Errores: `{ error: { code, message, details? } }`
+con 400 validación, 401 sin usuario, 403 permiso, 404 no existe y 409 regla de negocio.
 
-## Seguridad y rendimiento
+## Seguridad
 
-- **Consultas parametrizadas** en toda la capa SQL, lo que impide la inyección SQL.
-- **Validación estricta** con zod: tipos, longitudes y enumeraciones; además, el cuerpo
-  está limitado a 20 kB.
-- **helmet**: cabeceras de seguridad, CSP y ocultación de `X-Powered-By`.
-- Los errores internos no exponen trazas al cliente.
-- SQLite en modo WAL, con índices en las claves foráneas más consultadas.
-- **Limitación conocida del prototipo:** la identidad viaja en `X-User-Id` sin firma. En
-  producción se reemplaza por autenticación real (OIDC/SSO con MFA, que es justamente la
-  lección del caso) y por sesiones o JWT firmados.
-
-## Documentación adicional
-
-- `docs/evidencias-pruebas.md`: los tres escenarios paso a paso, para el informe.
-- `docs/panel-figma.md`: especificación del panel de servicios para reproducirlo en Figma.
+- Consultas parametrizadas (`$1, $2…`) en toda la capa SQL.
+- Validación con zod en la API y restricciones CHECK / FK en la base (doble barrera).
+- helmet, límite de 20 kB por petición y errores internos sin trazas.
+- Rol de base de datos propio, sin privilegios de superusuario.
+- **Limitación conocida:** la identidad viaja en `X-User-Id` sin firma. En producción se
+  reemplaza por OIDC/SSO con MFA (la lección del caso).

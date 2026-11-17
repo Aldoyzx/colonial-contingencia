@@ -1,19 +1,29 @@
 import { config } from './config.js';
-import { createDatabase } from './db/connection.js';
+import { ensureDatabase } from './db/migrate.js';
+import { createDb } from './db/pool.js';
 import { createApp } from './http/app.js';
 
-const db = createDatabase(config.dbPath);
-const app = createApp(db);
+const db = createDb(config.databaseUrl);
 
+try {
+  const created = await ensureDatabase(db);
+  if (created) console.log('Esquema creado y datos iniciales cargados.');
+} catch (error) {
+  console.error(`No se pudo conectar o preparar PostgreSQL (${error.message}).`);
+  console.error('Revisa DATABASE_URL o levanta la base con: docker compose up -d');
+  await db.close();
+  process.exit(1);
+}
+
+const app = createApp(db);
 const server = app.listen(config.port, () => {
   console.log(`API de contingencia escuchando en http://localhost:${config.port}`);
-  console.log(`Base de datos: ${config.dbPath}`);
 });
 
 function shutdown(signal) {
   console.log(`${signal} recibido, cerrando...`);
-  server.close(() => {
-    db.close();
+  server.close(async () => {
+    await db.close();
     process.exit(0);
   });
 }
