@@ -8,5 +8,5 @@ export const SQL_FILES = Object.freeze({
   schema: join(DATABASE_DIR, '01_esquema.sql'),
   seed: join(DATABASE_DIR, '02_datos_iniciales.sql'),
   demo: join(DATABASE_DIR, '04_datos_prueba.sql'),
-  migration: join(DATABASE_DIR, '05_migracion_actividad2.sql'),
+  migrations: [join(DATABASE_DIR, '05_migracion_actividad2.sql'), join(DATABASE_DIR, '06_migracion_entrega_final.sql')],
 });

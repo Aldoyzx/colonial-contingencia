@@ -18,7 +18,10 @@ async function schemaExists(db) {
 export async function ensureDatabase(db) {
   const created = !(await schemaExists(db));
   if (created) await runFile(db, SQL_FILES.schema);
-  else await runFile(db, SQL_FILES.migration); // bases creadas con la versión anterior
+  else {
+    // Bases creadas con versiones anteriores: las migraciones son idempotentes.
+    for (const file of SQL_FILES.migrations) await runFile(db, file);
+  }
   await runFile(db, SQL_FILES.seed);
   return created;
 }

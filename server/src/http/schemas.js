@@ -44,6 +44,49 @@ export const serviceStatusSchema = z.object({
   nota: z.string().trim().max(300).optional(),
 });
 
+export const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Correo inválido').max(120),
+  clave: z.string().min(1, 'Ingresa la contraseña').max(128),
+});
+
+export const mfaLoginSchema = z.object({
+  desafio: z.string().min(20).max(1000),
+  codigo: z.string().trim().regex(/^\d{6}$/, 'El código tiene 6 dígitos'),
+});
+
+export const mfaCodeSchema = z.object({
+  codigo: z.string().trim().regex(/^\d{6}$/, 'El código tiene 6 dígitos'),
+});
+
+export const disableMfaSchema = z.object({
+  clave: z.string().min(1).max(128),
+  codigo: z.string().trim().regex(/^\d{6}$/, 'El código tiene 6 dígitos'),
+});
+
+export const changePasswordSchema = z.object({
+  actual: z.string().min(1).max(128),
+  nueva: z.string().min(1).max(128),
+});
+
+export const uploadEvidenceSchema = z.object({
+  descripcion: z.string().trim().max(500).optional().transform((v) => v || undefined),
+  accionId: z.coerce.number().int().positive().optional(),
+});
+
+export const evidenceLibraryQuerySchema = z.object({
+  categoria: z.enum(['imagen', 'documento', 'video', 'audio', 'registro']).optional(),
+  incidenteId: z.coerce.number().int().positive().optional(),
+  incluirAnuladas: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
+});
+
+export const voidEvidenceSchema = z.object({
+  motivo: z.string().trim().min(10, 'Explica el motivo en al menos 10 caracteres').max(300),
+});
+
+export const contentQuerySchema = z.object({
+  descargar: z.enum(['1', '0']).optional(),
+});
+
 export function parse(schema, data) {
   const result = schema.safeParse(data ?? {});
   if (!result.success) {

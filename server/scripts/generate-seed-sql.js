@@ -3,11 +3,13 @@
  * el servidor (flow.js, resources.js y seedData.js), para que el script SQL y el
  * código nunca se desincronicen.   Uso: npm run db:generate-seed
  */
+import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { DATABASE_DIR } from '../src/db/files.js';
 import { DECISIONS, STAGES } from '../src/domain/flow.js';
 import { RESOURCES } from '../src/domain/resources.js';
-import { SERVICES, USERS } from '../src/db/seedData.js';
+import { DEMO_PASSWORD, SERVICES, USERS } from '../src/db/seedData.js';
+import { hashPassword } from '../src/security/password.js';
 
 const literal = (value) => {
   if (value === null || value === undefined) return 'NULL';
@@ -17,6 +19,11 @@ const literal = (value) => {
 };
 
 const valuesBlock = (rows) => rows.map((row) => `  (${row.map(literal).join(', ')})`).join(',\n');
+
+// Sal derivada del correo: el archivo generado es reproducible (CI compara que no cambie).
+// Solo se usa para las cuentas de demostración; las contraseñas nuevas usan sal aleatoria.
+const demoSalt = (email) => createHash('sha256').update(`demo-salt:${email}`).digest().subarray(0, 16);
+const userRows = await Promise.all(USERS.map(async (u) => [u.nombre, u.email, u.rol, await hashPassword(DEMO_PASSWORD, demoSalt(u.email))]));
 
 const stageRows = Object.entries(STAGES).map(([clave, s]) => [
   clave, s.nombre, s.orden, s.tipo, s.procedimiento ?? null, s.rolResponsable ?? null, s.siguiente ?? null, Boolean(s.esReintento),
@@ -72,10 +79,11 @@ ${stageResourceRows.join(',\n')}
   JOIN recursos_tecnologicos r ON r.codigo = v.codigo
 ON CONFLICT DO NOTHING;
 
--- Usuarios (actores del plan)
-INSERT INTO usuarios (nombre, email, rol) VALUES
-${valuesBlock(USERS.map((u) => [u.nombre, u.email, u.rol]))}
-ON CONFLICT (email) DO NOTHING;
+-- Usuarios (actores del plan). Contraseña inicial de demostración: ver server/src/db/seedData.js.
+-- Si la cuenta ya existe, solo completa la contraseña cuando aún no tiene una.
+INSERT INTO usuarios (nombre, email, rol, clave_hash) VALUES
+${valuesBlock(userRows)}
+ON CONFLICT (email) DO UPDATE SET clave_hash = COALESCE(usuarios.clave_hash, EXCLUDED.clave_hash);
 
 -- Servicios TI / OT del oleoducto
 INSERT INTO servicios (codigo, nombre, tipo, criticidad, descripcion) VALUES

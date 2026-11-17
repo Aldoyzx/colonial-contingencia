@@ -61,6 +61,8 @@ export const EVENT_LABELS = {
   cambio_estado_servicio: 'Cambio manual de estado',
   escalamiento: 'Escalamiento',
   incidente_cerrado: 'Incidente cerrado',
+  evidencia_registrada: 'Evidencia registrada',
+  evidencia_anulada: 'Evidencia anulada',
 };
 
 export function canChangeService(user, service) {
@@ -92,3 +94,32 @@ export const STAGE_TYPE_LABELS = {
   accion: 'Acción',
   decision: 'Decisión',
 };
+
+export const EVIDENCE_CATEGORY = {
+  imagen: 'Imágenes',
+  documento: 'Documentos',
+  video: 'Videos',
+  audio: 'Audios',
+  registro: 'Registros',
+};
+
+export const SECURITY_EVENT_LABELS = {
+  login_exitoso: 'Inicio de sesión',
+  login_fallido: 'Intento fallido',
+  cuenta_bloqueada: 'Cuenta bloqueada',
+  mfa_fallido: 'Código MFA incorrecto',
+  mfa_activado: 'MFA activado',
+  mfa_desactivado: 'MFA desactivado',
+  cierre_sesion: 'Cierre de sesión',
+  cambio_clave: 'Cambio de contraseña',
+  acceso_denegado: 'Acceso denegado',
+};
+
+export function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 ** 2).toFixed(1)} MB`;
+}
+
+export const formatHours = (h) => (h === null || h === undefined ? '—' : h >= 48 ? `${(h / 24).toFixed(1)} días` : `${Number(h).toFixed(1)} h`);

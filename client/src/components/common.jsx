@@ -57,7 +57,7 @@ export function SimulacroBadge({ show = true }) {
  * Diálogo modal accesible (elemento nativo <dialog>): bloquea el fondo, gestiona el foco
  * y se cierra con Esc. Reemplaza a window.prompt, que no permite validar ni dar estilo.
  */
-export function NoteDialog({ open, title, description, maxLength = 300, required = false, confirmLabel = 'Confirmar', onConfirm, onCancel }) {
+export function NoteDialog({ open, title, description, maxLength = 300, required = false, minLength = 1, label = 'Nota', confirmLabel = 'Confirmar', onConfirm, onCancel }) {
   const dialogRef = useRef(null);
   const [value, setValue] = useState('');
 
@@ -73,7 +73,7 @@ export function NoteDialog({ open, title, description, maxLength = 300, required
   }, [open]);
 
   const trimmed = value.trim();
-  const invalid = required && trimmed.length === 0;
+  const invalid = required && trimmed.length < minLength;
 
   const submit = (e) => {
     e.preventDefault();
@@ -86,7 +86,7 @@ export function NoteDialog({ open, title, description, maxLength = 300, required
         <h3 id="note-dialog-title">{title}</h3>
         {description && <p className="muted small">{description}</p>}
         <label className="field">
-          <span>Nota {required ? '(obligatoria)' : '(opcional)'}</span>
+          <span>{label} {required ? (minLength > 1 ? `(mínimo ${minLength} caracteres)` : '(obligatoria)') : '(opcional)'}</span>
           <textarea rows={3} value={value} maxLength={maxLength} onChange={(e) => setValue(e.target.value)} autoFocus
             placeholder="Ej.: SCADA validado por el operador de turno" />
           <small className="muted">{value.length}/{maxLength}</small>

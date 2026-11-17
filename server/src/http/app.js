@@ -1,11 +1,37 @@
+import cookieParser from 'cookie-parser';
 import express from 'express';
 import helmet from 'helmet';
+import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AppError, UnauthorizedError } from '../domain/errors.js';
+import { AppError } from '../domain/errors.js';
 import { describeFlow } from '../domain/flow.js';
+import { DEMO_PASSWORD, USERS } from '../db/seedData.js';
+import { createRateLimiter } from '../security/rateLimiter.js';
 import { createAction, updateAction } from '../services/actionService.js';
+import { getAnalytics, incidentsCsv } from '../services/analyticsService.js';
+import {
+  authenticateMfa,
+  authenticatePassword,
+  changePassword,
+  confirmMfaEnrollment,
+  disableMfa,
+  getPublicUser,
+  listSecurityEvents,
+  recordSecurityEvent,
+  startMfaEnrollment,
+} from '../services/authService.js';
+import {
+  ACCEPTED_EXTENSIONS,
+  contentDisposition,
+  listEvidenceLibrary,
+  listIncidentEvidence,
+  readEvidenceContent,
+  uploadEvidence,
+  verifyEvidenceIntegrity,
+  voidEvidence,
+} from '../services/evidenceService.js';
 import {
   advanceIncident,
   createIncident,
@@ -15,40 +41,43 @@ import {
 } from '../services/incidentService.js';
 import { getContingencyPlan } from '../services/planService.js';
 import { changeServiceStatus, getDashboard, listServices } from '../services/serviceStatusService.js';
-import { getActiveUser, listUsers } from '../services/userService.js';
+import { listUsers } from '../services/userService.js';
+import { createStorage } from '../storage/index.js';
 import {
   advanceSchema,
+  changePasswordSchema,
+  contentQuerySchema,
   createActionSchema,
   createIncidentSchema,
   decisionSchema,
+  disableMfaSchema,
+  evidenceLibraryQuerySchema,
   idParamSchema,
   listIncidentsQuerySchema,
+  loginSchema,
+  mfaCodeSchema,
+  mfaLoginSchema,
   parse,
   serviceStatusSchema,
   updateActionSchema,
+  uploadEvidenceSchema,
+  voidEvidenceSchema,
 } from './schemas.js';
+import { authenticate, createSessionManager, mfaPending, requestContext, requireRole } from './session.js';
 
 const CLIENT_DIST = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'client', 'dist');
 
-/**
- * Express 5 propaga a errorHandler los errores de los handlers async; no hace falta try/catch.
- * Identifica al usuario por la cabecera X-User-Id.
- * Prototipo académico: en producción se reemplaza por sesión o JWT firmado.
- */
-function authenticate(db) {
-  return async (req, _res, next) => {
-    const userId = Number.parseInt(req.get('X-User-Id') ?? '', 10);
-    if (!Number.isInteger(userId) || userId <= 0) {
-      throw new UnauthorizedError('Falta la cabecera X-User-Id');
-    }
-    req.user = await getActiveUser(db, userId);
-    next();
-  };
-}
+/** Tipos que el navegador puede mostrar en línea sin riesgo de ejecutar código. */
+const INLINE_SAFE = /^(image\/(jpeg|png|webp|gif)|application\/pdf|video\/|audio\/|text\/plain|text\/csv|application\/json)/;
 
 function errorHandler(err, _req, res, _next) {
   if (err instanceof AppError) {
     return res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details } });
+  }
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const message = err.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera el tamaño máximo permitido' : `Carga inválida: ${err.message}`;
+    return res.status(status).json({ error: { code: 'UPLOAD_ERROR', message } });
   }
   if (err?.type === 'entity.parse.failed') {
     return res.status(400).json({ error: { code: 'INVALID_JSON', message: 'El cuerpo no es JSON válido' } });
@@ -57,30 +86,163 @@ function errorHandler(err, _req, res, _next) {
     return res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'El cuerpo excede el tamaño permitido' } });
   }
   if (err?.code === '23505') {
-    // Violación de UNIQUE en PostgreSQL (p. ej., una decisión repetida por doble clic).
     return res.status(409).json({ error: { code: 'CONFLICT', message: 'El registro ya existe o fue modificado por otro usuario' } });
   }
   console.error(err);
   return res.status(500).json({ error: { code: 'INTERNAL', message: 'Error interno del servidor' } });
 }
 
-export function createApp(db) {
+function authRoutes(db, config, sessions, loginLimiter) {
+  const router = express.Router();
+  const auth = authenticate(db, config, { allowMfaPending: true });
+
+  const sessionResponse = async (userId) => {
+    const usuario = await getPublicUser(db, userId);
+    return { usuario, mfaPendiente: mfaPending(usuario, config) };
+  };
+
+  router.get('/config', (_req, res) => res.json({
+    cuentasDemo: config.showDemoAccounts ? { clave: DEMO_PASSWORD, cuentas: USERS.map((u) => ({ email: u.email, nombre: u.nombre, rol: u.rol })) } : null,
+    mfaObligatorioRoles: config.mfaRequiredRoles,
+  }));
+
+  router.post('/login', async (req, res) => {
+    if (!loginLimiter.take(req.ip)) {
+      return res.status(429).json({ error: { code: 'TOO_MANY_REQUESTS', message: 'Demasiados intentos desde esta red. Espera un minuto' } });
+    }
+    const credentials = parse(loginSchema, req.body);
+    const result = await authenticatePassword(db, credentials, requestContext(req));
+    if (result.mfaRequerido) {
+      return res.json({ mfaRequerido: true, desafio: sessions.issueMfaChallenge(result.userId) });
+    }
+    sessions.issueSession(res, result.userId);
+    res.json(await sessionResponse(result.userId));
+  });
+
+  router.post('/mfa', async (req, res) => {
+    if (!loginLimiter.take(req.ip)) {
+      return res.status(429).json({ error: { code: 'TOO_MANY_REQUESTS', message: 'Demasiados intentos. Espera un minuto' } });
+    }
+    const { desafio, codigo } = parse(mfaLoginSchema, req.body);
+    const userId = sessions.readMfaChallenge(desafio);
+    await authenticateMfa(db, userId, codigo, requestContext(req), config.appSecret);
+    sessions.issueSession(res, userId);
+    res.json(await sessionResponse(userId));
+  });
+
+  router.get('/sesion', auth, async (req, res) => res.json(await sessionResponse(req.user.id)));
+
+  router.post('/logout', auth, async (req, res) => {
+    await recordSecurityEvent(db, { usuarioId: req.user.id, email: req.user.email, evento: 'cierre_sesion' }, requestContext(req));
+    sessions.clearSession(res);
+    res.status(204).end();
+  });
+
+  router.post('/mfa/configurar', auth, async (req, res) => {
+    res.json(await startMfaEnrollment(db, req.user, config.appSecret));
+  });
+  router.post('/mfa/confirmar', auth, async (req, res) => {
+    const { codigo } = parse(mfaCodeSchema, req.body);
+    await confirmMfaEnrollment(db, req.user, codigo, requestContext(req), config.appSecret);
+    res.json(await sessionResponse(req.user.id));
+  });
+  router.post('/mfa/desactivar', auth, async (req, res) => {
+    await disableMfa(db, req.user, parse(disableMfaSchema, req.body), requestContext(req), config.appSecret, config.mfaRequiredRoles);
+    res.json(await sessionResponse(req.user.id));
+  });
+  router.post('/clave', auth, async (req, res) => {
+    await changePassword(db, req.user, parse(changePasswordSchema, req.body), requestContext(req));
+    res.status(204).end();
+  });
+  return router;
+}
+
+function evidenceRoutes(db, config, storage) {
+  const router = express.Router();
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1, fields: 5 } });
+
+  router.get('/evidencias/config', (_req, res) => res.json({ extensiones: ACCEPTED_EXTENSIONS, maxBytes: config.maxUploadBytes }));
+
+  router.get('/evidencias', async (req, res) => {
+    res.json(await listEvidenceLibrary(db, parse(evidenceLibraryQuerySchema, req.query)));
+  });
+
+  router.get('/incidentes/:id/evidencias', async (req, res) => {
+    const { id } = parse(idParamSchema, req.params);
+    res.json(await listIncidentEvidence(db, id));
+  });
+
+  router.post('/incidentes/:id/evidencias', upload.single('archivo'), async (req, res) => {
+    const { id } = parse(idParamSchema, req.params);
+    const fields = parse(uploadEvidenceSchema, req.body);
+    res.status(201).json(await uploadEvidence(db, storage, id, { file: req.file, ...fields }, req.user));
+  });
+
+  router.get('/evidencias/:id/contenido', async (req, res) => {
+    const { id } = parse(idParamSchema, req.params);
+    const { descargar } = parse(contentQuerySchema, req.query);
+    const { evidence, buffer } = await readEvidenceContent(db, storage, id);
+    const inline = descargar !== '1' && INLINE_SAFE.test(evidence.tipo_mime);
+    res.set({
+      'Content-Type': evidence.tipo_mime,
+      'Content-Length': String(buffer.length),
+      'Content-Disposition': contentDisposition(evidence.nombre_original, !inline),
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=300',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    });
+    if (inline && evidence.tipo_mime !== 'application/pdf') {
+      res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox");
+    }
+    res.send(buffer);
+  });
+
+  router.get('/evidencias/:id/verificar', async (req, res) => {
+    const { id } = parse(idParamSchema, req.params);
+    res.json(await verifyEvidenceIntegrity(db, storage, id));
+  });
+
+  router.post('/evidencias/:id/anular', async (req, res) => {
+    const { id } = parse(idParamSchema, req.params);
+    res.json(await voidEvidence(db, id, parse(voidEvidenceSchema, req.body), req.user));
+  });
+  return router;
+}
+
+export function createApp(db, config) {
   const app = express();
-  app.use(helmet());
+  const sessions = createSessionManager(config);
+  const storage = createStorage(config);
+  const loginLimiter = createRateLimiter({ windowMs: 60_000, max: config.loginRateLimit ?? 10 });
+
+  app.set('trust proxy', 1); // detrás del balanceador de la nube: IP real y cookies seguras
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        'default-src': ["'self'"],
+        'img-src': ["'self'", 'data:', 'blob:'],
+        'media-src': ["'self'", 'blob:'],
+        'frame-src': ["'self'"],
+        'object-src': ["'none'"],
+        'frame-ancestors': ["'self'"],
+      },
+    },
+  }));
   app.use(express.json({ limit: '20kb' }));
+  app.use(cookieParser());
 
   const api = express.Router();
-
   api.get('/health', async (_req, res) => {
     await db.one('SELECT 1');
-    res.json({ status: 'ok', baseDeDatos: 'ok' });
+    res.json({ status: 'ok', baseDeDatos: 'ok', almacenamiento: storage.active.name });
   });
+  api.use('/auth', authRoutes(db, config, sessions, loginLimiter));
+
+  api.use(authenticate(db, config));
+
   api.get('/usuarios', async (_req, res) => res.json(await listUsers(db)));
   api.get('/flujo', (_req, res) => res.json(describeFlow()));
   api.get('/plan', async (_req, res) => res.json(await getContingencyPlan(db)));
-
-  api.use(authenticate(db));
-
   api.get('/dashboard', async (_req, res) => res.json(await getDashboard(db)));
   api.get('/servicios', async (_req, res) => res.json(await listServices(db)));
   api.patch('/servicios/:id/estado', async (req, res) => {
@@ -110,19 +272,27 @@ export function createApp(db) {
     const { id } = parse(idParamSchema, req.params);
     res.status(201).json(await createAction(db, id, parse(createActionSchema, req.body), req.user));
   });
-
   api.patch('/acciones/:id', async (req, res) => {
     const { id } = parse(idParamSchema, req.params);
     res.json(await updateAction(db, id, parse(updateActionSchema, req.body), req.user));
   });
 
-  api.use((_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ruta no encontrada' } }));
+  api.use(evidenceRoutes(db, config, storage));
 
+  api.get('/analitica', async (req, res) => {
+    res.json(await getAnalytics(db, { includeSecurity: req.user.rol === 'coordinador' }));
+  });
+  api.get('/analitica/incidentes.csv', async (_req, res) => {
+    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="incidentes.csv"' });
+    res.send(await incidentsCsv(db));
+  });
+  api.get('/seguridad/eventos', requireRole('coordinador'), async (_req, res) => res.json(await listSecurityEvents(db)));
+
+  api.use((_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ruta no encontrada' } }));
   app.use('/api', api);
 
-  // En modo producción el mismo servidor entrega el frontend compilado.
   if (existsSync(CLIENT_DIST)) {
-    app.use(express.static(CLIENT_DIST));
+    app.use(express.static(CLIENT_DIST, { maxAge: '1h', index: false }));
     app.get('/{*ruta}', (_req, res) => res.sendFile(join(CLIENT_DIST, 'index.html')));
   }
 

@@ -12,7 +12,7 @@ const TEST_DATABASE_URL =
 const db = createDb(TEST_DATABASE_URL, { allowExitOnIdle: true, max: 4 });
 let schemaReady = false;
 
-const DATA_TABLES = 'historial_recuperacion, decisiones, acciones, incidente_servicios, incidentes, servicios, usuarios';
+const DATA_TABLES = 'evidencia_contenidos, evidencias, eventos_seguridad, historial_recuperacion, decisiones, acciones, incidente_servicios, incidentes, servicios, usuarios';
 
 /** Base limpia para cada prueba: el esquema se crea una vez y luego solo se vacían los datos. */
 async function freshDatabase() {

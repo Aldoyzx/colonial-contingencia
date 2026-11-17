@@ -3,7 +3,7 @@ import { ensureDatabase } from './db/migrate.js';
 import { createDb } from './db/pool.js';
 import { createApp } from './http/app.js';
 
-const db = createDb(config.databaseUrl);
+const db = createDb(config.databaseUrl, config.databaseSsl ? { ssl: { rejectUnauthorized: true } } : {});
 
 try {
   const created = await ensureDatabase(db);
@@ -15,9 +15,10 @@ try {
   process.exit(1);
 }
 
-const app = createApp(db);
+const app = createApp(db, config);
 const server = app.listen(config.port, () => {
   console.log(`API de contingencia escuchando en http://localhost:${config.port}`);
+  console.log(`Almacenamiento de evidencias: ${config.storage}${config.mfaRequiredRoles.length ? ` · MFA obligatorio para: ${config.mfaRequiredRoles.join(', ')}` : ''}`);
 });
 
 function shutdown(signal) {

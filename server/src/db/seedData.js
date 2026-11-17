@@ -1,4 +1,10 @@
 /** Datos maestros: actores del plan y activos TI/OT del oleoducto. */
+
+/**
+ * Contraseña inicial de las cuentas de demostración. Cada usuario debe cambiarla en
+ * "Mi cuenta"; en producción, MOSTRAR_CUENTAS_DEMO=false oculta las cuentas en el acceso.
+ */
+export const DEMO_PASSWORD = 'Colonial2021!';
 export const USERS = Object.freeze([
   { nombre: 'María Torres', email: 'mtorres@colonial.local', rol: 'coordinador' },
   { nombre: 'Javier Ríos', email: 'jrios@colonial.local', rol: 'analista_ti' },

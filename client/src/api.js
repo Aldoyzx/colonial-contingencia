@@ -6,37 +6,60 @@ export class ApiError extends Error {
   }
 }
 
-let currentUserId = null;
+let onUnauthorized = () => {};
 
-export function setCurrentUser(userId) {
-  currentUserId = userId;
+/** App registra aquí qué hacer cuando la sesión vence (volver al inicio de sesión). */
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler;
 }
 
-async function request(path, { method = 'GET', body } = {}) {
-  const headers = { Accept: 'application/json' };
+/**
+ * La sesión viaja en una cookie httpOnly que el navegador envía solo; el código no puede
+ * leerla. X-Requested-With es la cabecera anti-CSRF que exige el servidor.
+ */
+async function request(path, { method = 'GET', body, form, silent401 = false } = {}) {
+  const headers = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (currentUserId) headers['X-User-Id'] = String(currentUserId);
 
   let response;
   try {
     response = await fetch(`/api${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'same-origin',
+      body: form ?? (body === undefined ? undefined : JSON.stringify(body)),
     });
   } catch {
-    throw new ApiError('No se pudo conectar con el servidor. ¿Está corriendo la API en el puerto 4000?', 0);
+    throw new ApiError('No se pudo conectar con el servidor. Revisa tu conexión.', 0);
   }
 
+  if (response.status === 204) return null;
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401 && !silent401) onUnauthorized();
     const error = payload?.error;
     throw new ApiError(error?.message ?? `Error ${response.status}`, response.status, error?.details);
   }
   return payload;
 }
 
+export const evidenceUrl = (id, { download = false } = {}) => `/api/evidencias/${id}/contenido${download ? '?descargar=1' : ''}`;
+export const incidentsCsvUrl = '/api/analitica/incidentes.csv';
+
 export const api = {
+  // sesión y cuenta
+  authConfig: () => request('/auth/config'),
+  session: () => request('/auth/sesion', { silent401: true }),
+  login: (data) => request('/auth/login', { method: 'POST', body: data, silent401: true }),
+  loginMfa: (data) => request('/auth/mfa', { method: 'POST', body: data, silent401: true }),
+  logout: () => request('/auth/logout', { method: 'POST', silent401: true }),
+  startMfa: () => request('/auth/mfa/configurar', { method: 'POST' }),
+  confirmMfa: (codigo) => request('/auth/mfa/confirmar', { method: 'POST', body: { codigo } }),
+  disableMfa: (data) => request('/auth/mfa/desactivar', { method: 'POST', body: data }),
+  changePassword: (data) => request('/auth/clave', { method: 'POST', body: data }),
+  securityEvents: () => request('/seguridad/eventos'),
+
+  // operación
   users: () => request('/usuarios'),
   flow: () => request('/flujo'),
   plan: () => request('/plan'),
@@ -50,4 +73,29 @@ export const api = {
   decide: (id, data) => request(`/incidentes/${id}/decisiones`, { method: 'POST', body: data }),
   createAction: (id, data) => request(`/incidentes/${id}/acciones`, { method: 'POST', body: data }),
   updateAction: (id, data) => request(`/acciones/${id}`, { method: 'PATCH', body: data }),
+
+  // evidencias multimedia
+  evidenceConfig: () => request('/evidencias/config'),
+  incidentEvidence: (id) => request(`/incidentes/${id}/evidencias`),
+  evidenceLibrary: (filters = {}) => {
+    const params = new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== undefined && v !== '' && v !== false));
+    return request(`/evidencias${params.size ? `?${params}` : ''}`);
+  },
+  uploadEvidence: (incidentId, { file, descripcion, accionId }) => {
+    const form = new FormData();
+    form.append('archivo', file);
+    if (descripcion) form.append('descripcion', descripcion);
+    if (accionId) form.append('accionId', String(accionId));
+    return request(`/incidentes/${incidentId}/evidencias`, { method: 'POST', form });
+  },
+  verifyEvidence: (id) => request(`/evidencias/${id}/verificar`),
+  voidEvidence: (id, motivo) => request(`/evidencias/${id}/anular`, { method: 'POST', body: { motivo } }),
+  evidenceText: async (id) => {
+    const res = await fetch(evidenceUrl(id), { credentials: 'same-origin' });
+    if (!res.ok) throw new ApiError('No se pudo leer el archivo', res.status);
+    return res.text();
+  },
+
+  // analítica
+  analytics: () => request('/analitica'),
 };

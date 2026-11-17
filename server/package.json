@@ -14,12 +14,17 @@
     "db:reset": "node --env-file-if-exists=.env src/db/reset.js",
     "db:demo": "node --env-file-if-exists=.env src/db/reset.js --demo",
     "db:generate-seed": "node scripts/generate-seed-sql.js",
-    "simulacro": "node --env-file-if-exists=.env scripts/simulacro.js"
+    "simulacro": "node --env-file-if-exists=.env scripts/simulacro.js",
+    "db:generate-demo": "node --env-file-if-exists=.env scripts/generate-demo-sql.js"
   },
   "dependencies": {
+    "cookie-parser": "^1.4.7",
     "express": "^5.1.0",
+    "file-type": "^21.3.4",
     "helmet": "^8.1.0",
+    "multer": "^2.5.0",
     "pg": "^8.16.3",
+    "qrcode": "^1.5.4",
     "zod": "^4.6.7"
   }
 }

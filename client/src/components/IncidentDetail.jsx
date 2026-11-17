@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { EVENT_LABELS, formatDate, stageLabel } from '../constants.js';
 import { useAsync } from '../useAsync.js';
 import ActionsPanel from './ActionsPanel.jsx';
+import EvidencePanel from './EvidencePanel.jsx';
 import { ErrorBanner, Loading, ServiceStateBadge, SeverityBadge, SimulacroBadge } from './common.jsx';
 import FlowStepper from './FlowStepper.jsx';
 import NextStepPanel from './NextStepPanel.jsx';
@@ -72,6 +73,7 @@ export default function IncidentDetail({ id, users, user, onBack }) {
             onUpdate={(actionId, payload) => run(() => api.updateAction(actionId, payload))}
             onCreate={(payload) => run(() => api.createAction(id, payload))}
           />
+          <EvidencePanel incident={incident} user={user} onChanged={async () => setData(await api.incident(id))} />
         </div>
 
         <aside className="detail__side">
