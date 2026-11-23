@@ -40,7 +40,7 @@ import {
   listIncidents,
 } from '../services/incidentService.js';
 import { getContingencyPlan } from '../services/planService.js';
-import { getAsset, getDataCenterMap, getPipelineMap, isolateAsset, releaseAsset } from '../services/assetService.js';
+import { getAsset, getPipelineMap, isolateAsset, releaseAsset } from '../services/assetService.js';
 import { listLedger, verifyLedger } from '../services/ledgerService.js';
 import { closeRound, getRound, listRounds, recordCheck, startRound } from '../services/roundService.js';
 import { changeServiceStatus, getDashboard, listServices } from '../services/serviceStatusService.js';
@@ -218,11 +218,10 @@ function evidenceRoutes(db, config, storage) {
   return router;
 }
 
-/** Mapas de calor, aislamiento de activos, rondas de verificación y bitácora encadenada. */
+/** Mapa de calor de la red, aislamiento de tramos y sistemas, rondas y bitácora encadenada. */
 function mapRoutes(db) {
   const router = express.Router();
 
-  router.get('/mapas/centro-datos', async (_req, res) => res.json(await getDataCenterMap(db)));
   router.get('/mapas/oleoducto', async (_req, res) => res.json(await getPipelineMap(db)));
 
   router.get('/activos/:id', async (req, res) => {

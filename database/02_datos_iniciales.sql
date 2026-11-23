@@ -1,6 +1,6 @@
 -- =============================================================================
 --  Centro de Contingencia — Colonial Pipeline (2021)
---  02 · Datos iniciales: catálogo del plan, recursos, usuarios, servicios, ubicaciones y activos
+--  02 · Datos iniciales: catálogo del plan, recursos, usuarios, servicios y red del oleoducto
 --  Gestor: PostgreSQL 16 · ARCHIVO GENERADO por server/scripts/generate-seed-sql.js
 --
 --  Es idempotente: puede ejecutarse varias veces sin duplicar registros.
@@ -116,80 +116,71 @@ INSERT INTO servicios (codigo, nombre, tipo, criticidad, descripcion) VALUES
   ('TI-BKP', 'Plataforma de respaldos', 'TI', 5, 'Copias de seguridad de sistemas TI.')
 ON CONFLICT (codigo) DO NOTHING;
 
--- Instalaciones de la red (distancias aproximadas, con fines académicos)
-INSERT INTO ubicaciones (codigo, nombre, tipo, ciudad, estado_eeuu, km_aprox, servicio_id, descripcion)
-SELECT v.codigo, v.nombre, v.tipo::tipo_ubicacion, v.ciudad, v.estado, v.km::SMALLINT, s.id, v.descripcion
+-- Instalaciones y mercados de la red (mapa oficial de Colonial; ver fuentes de cada fila)
+INSERT INTO ubicaciones (codigo, nombre, tipo, ciudad, estado_eeuu, latitud, longitud, servicio_id, descripcion, fuentes)
+SELECT v.codigo, v.nombre, v.tipo::tipo_ubicacion, v.ciudad, v.estado, v.latitud, v.longitud, s.id, v.descripcion, v.fuentes
   FROM (VALUES
-  ('HOU', 'Origen Houston', 'patio_tanques', 'Pasadena', 'TX', 0, 'OT-T1', 'Origen de la línea principal: recibe gasolina, diésel y jet fuel de las refinerías del golfo de México.'),
-  ('LCH', 'Lake Charles', 'estacion_bombeo', 'Lake Charles', 'LA', 230, 'OT-T1', 'Inyección de producto de las refinerías del oeste de Luisiana.'),
-  ('BTR', 'Baton Rouge', 'estacion_bombeo', 'Baton Rouge', 'LA', 430, 'OT-T1', 'Inyección de producto de las refinerías del río Misisipi.'),
-  ('COL', 'Collins', 'patio_tanques', 'Collins', 'MS', 650, 'OT-T1', 'Gran patio de tanques; desde aquí se bombea hacia el noreste.'),
-  ('ATL', 'Atlanta', 'patio_tanques', 'Atlanta', 'GA', 1130, 'OT-T1', 'Entregas al mercado de Georgia y paso hacia las Carolinas.'),
-  ('CLT', 'Charlotte', 'estacion_bombeo', 'Charlotte', 'NC', 1490, 'OT-T2', 'Entregas a las Carolinas.'),
-  ('GSO', 'Greensboro', 'patio_tanques', 'Greensboro', 'NC', 1650, 'OT-T2', 'Nudo principal donde la red se divide hacia el noreste.'),
-  ('RIC', 'Richmond', 'estacion_bombeo', 'Richmond', 'VA', 1960, 'OT-T3', 'Entregas en Virginia.'),
-  ('DOR', 'Dorsey Junction', 'patio_tanques', 'Woodbine', 'MD', 2160, 'OT-T3', 'Entregas al área de Baltimore y Washington D. C.'),
-  ('LIN', 'Linden', 'terminal', 'Linden', 'NJ', 2460, 'OT-T3', 'Terminal final hacia el puerto de Nueva York.'),
-  ('ALP', 'Centro de control', 'centro_control', 'Alpharetta', 'GA', NULL, 'OT-SCADA', 'Sede de la empresa y centro de control desde donde se opera SCADA.'),
-  ('ADC', 'Centro de datos corporativo', 'centro_datos', 'Alpharetta', 'GA', NULL, NULL, 'Sala de servidores de TI (ubicación referencial: la real no es pública).')
-  ) AS v (codigo, nombre, tipo, ciudad, estado, km, servicio, descripcion)
-  LEFT JOIN servicios s ON s.codigo = v.servicio
+  ('HOU', 'Houston', 'origen', 'Houston', 'TX', 29.7604, -95.3698, 'OT-T1', 'Origen del sistema: las líneas 1 y 2 salen de aquí con producto de las refinerías del golfo.', ARRAY['mckinsey', 'wikipedia', 'colmap0513']),
+  ('OPE', 'Opelousas', 'punto_entrega', 'Opelousas', 'LA', 30.5335, -92.0815, 'OT-T1', 'Mercado de entrega en Luisiana.', ARRAY['colmap0513']),
+  ('MER', 'Meridian', 'punto_entrega', 'Meridian', 'MS', 32.3643, -88.7037, 'OT-T1', 'Mercado de entrega en Misisipi.', ARRAY['colmap0513']),
+  ('BOL', 'Boligee', 'punto_entrega', 'Boligee', 'AL', 32.7579, -88.0281, 'OT-T1', 'Mercado de entrega en Alabama.', ARRAY['colmap0513']),
+  ('BHM', 'Birmingham', 'punto_entrega', 'Birmingham', 'AL', 33.5186, -86.8104, 'OT-T1', 'Mercado de entrega en Alabama.', ARRAY['colmap0513']),
+  ('ATL', 'Atlanta', 'punto_entrega', 'Atlanta', 'GA', 33.749, -84.388, 'OT-T1', 'Mercado de entrega; de aquí salen los ramales a Tennessee y al sur de Georgia.', ARRAY['colmap0513', 'mckinsey']),
+  ('NAS', 'Nashville', 'punto_entrega', 'Nashville', 'TN', 36.1627, -86.7816, 'OT-T1', 'Mercado del ramal Atlanta–Tennessee.', ARRAY['colmap0513', 'mckinsey']),
+  ('KNX', 'Knoxville', 'punto_entrega', 'Knoxville', 'TN', 35.9606, -83.9207, 'OT-T1', 'Mercado del ramal Atlanta–Tennessee.', ARRAY['colmap0513', 'mckinsey']),
+  ('MAC', 'Macon', 'punto_entrega', 'Macon', 'GA', 32.8407, -83.6324, 'OT-T1', 'Mercado del ramal Atlanta–sur de Georgia.', ARRAY['colmap0513', 'mckinsey']),
+  ('BAI', 'Bainbridge', 'punto_entrega', 'Bainbridge', 'GA', 30.9038, -84.5755, 'OT-T1', 'Mercado del ramal Atlanta–sur de Georgia.', ARRAY['colmap0513', 'mckinsey']),
+  ('BEL', 'Belton', 'punto_entrega', 'Belton', 'SC', 34.5229, -82.4943, 'OT-T2', 'Mercado de entrega en Carolina del Sur.', ARRAY['colmap0513']),
+  ('AUG', 'Augusta', 'punto_entrega', 'Augusta', 'GA', 33.4735, -82.0105, 'OT-T2', 'Mercado de entrega; su conexión se dibuja al nodo de línea principal más cercano.', ARRAY['colmap0513']),
+  ('SPA', 'Spartanburg', 'punto_entrega', 'Spartanburg', 'SC', 34.9496, -81.932, 'OT-T2', 'Mercado de entrega en Carolina del Sur.', ARRAY['colmap0513']),
+  ('CLT', 'Charlotte', 'punto_entrega', 'Charlotte', 'NC', 35.2271, -80.8431, 'OT-T2', 'Mercado de entrega en Carolina del Norte.', ARRAY['colmap0513']),
+  ('GSO', 'Greensboro', 'patio_tanques', 'Greensboro', 'NC', 36.0726, -79.792, 'OT-T3', 'Patio de tanques más grande: terminan las líneas 1 y 2 y nacen las líneas 3 y 4.', ARRAY['wikipedia', 'mckinsey']),
+  ('SEL', 'Selma', 'punto_entrega', 'Selma', 'NC', 35.5354, -78.2836, 'OT-T3', 'Mercado del ramal Greensboro–Raleigh/Durham.', ARRAY['colmap0513', 'mckinsey']),
+  ('MIT', 'Mitchell', 'derivacion', 'Mitchell', 'VA', 38.37, -78, 'OT-T3', 'Punto del centro de Virginia del que salen los ramales a Richmond y Norfolk (ubicación aproximada: la fuente solo dice “centro de Virginia”).', ARRAY['mckinsey', 'colmap0513']),
+  ('RIC', 'Richmond', 'punto_entrega', 'Richmond', 'VA', 37.5407, -77.436, 'OT-T3', 'Mercado del ramal Mitchell–Richmond/Norfolk.', ARRAY['colmap0513', 'mckinsey']),
+  ('NOR', 'Norfolk', 'punto_entrega', 'Norfolk', 'VA', 36.8508, -76.2859, 'OT-T3', 'Mercado del ramal Mitchell–Richmond/Norfolk.', ARRAY['colmap0513', 'mckinsey']),
+  ('DOR', 'Dorsey Junction', 'estacion', 'Woodbine', 'MD', 39.362, -77.065, 'OT-T3', 'Estación de bombeo Dorsey Junction; destino de la Línea 4 (Greensboro–Woodbine).', ARRAY['wikipedia', 'fox0510', 'colmap0513']),
+  ('BAL', 'Baltimore', 'punto_entrega', 'Baltimore', 'MD', 39.2904, -76.6122, 'OT-T3', 'Mercado de entrega de la Línea 4.', ARRAY['colmap0513', 'mckinsey']),
+  ('LIN', 'Linden', 'terminal', 'Linden', 'NJ', 40.622, -74.2446, 'OT-T3', 'Fin del sistema: patio de tanques Linden Junction, hacia el puerto de Nueva York.', ARRAY['colmap0513', 'wikipedia', 'mckinsey'])
+  ) AS v (codigo, nombre, tipo, ciudad, estado, latitud, longitud, servicio, descripcion, fuentes)
+  JOIN servicios s ON s.codigo = v.servicio
 ON CONFLICT (codigo) DO UPDATE SET
   nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, ciudad = EXCLUDED.ciudad, estado_eeuu = EXCLUDED.estado_eeuu,
-  km_aprox = EXCLUDED.km_aprox, servicio_id = EXCLUDED.servicio_id, descripcion = EXCLUDED.descripcion;
+  latitud = EXCLUDED.latitud, longitud = EXCLUDED.longitud, servicio_id = EXCLUDED.servicio_id,
+  descripcion = EXCLUDED.descripcion, fuentes = EXCLUDED.fuentes;
 
--- Activos por rack (plataformas de referencia). El estado de aislamiento no se toca al resincronizar.
-INSERT INTO activos (codigo, nombre, plataforma, funcion, red, servicio_id, ubicacion_id, rack, u_inicio, u_alto, criticidad,
-                     expuesto_internet, sin_mfa, sin_soporte, privilegiado)
-SELECT v.codigo, v.nombre, v.plataforma, v.funcion, v.red::tipo_servicio, s.id, u.id, v.rack, v.u::SMALLINT, v.alto::SMALLINT,
-       v.criticidad::SMALLINT, v.expuesto, v.sin_mfa, v.sin_soporte, v.privilegiado
+-- Tramos y sistemas del caso. El estado de aislamiento no se toca al resincronizar.
+INSERT INTO activos (codigo, nombre, tipo, red, servicio_id, linea, desde_id, hasta_id, paradas, diametro_pulg, capacidad_bpd,
+                     producto, descripcion, hallazgo, fuentes)
+SELECT v.codigo, v.nombre, v.tipo::tipo_activo, v.red::tipo_servicio, s.id, v.linea, d.id, h.id, v.paradas::CHAR(3)[],
+       v.diametro::SMALLINT, v.capacidad::INTEGER, v.producto, v.descripcion, v.hallazgo, v.fuentes
   FROM (VALUES
-  ('FW-PERIM01', 'Firewall perimetral', 'Firewall de nueva generación (NGFW) en clúster', 'Filtra el tráfico entre Internet y la red corporativa.', 'TI', NULL, 'ADC', 'A01', 40, 2, 5, TRUE, FALSE, FALSE, FALSE),
-  ('VPN-LEGADO', 'VPN SSL heredada', 'Concentrador VPN SSL con usuario y contraseña', 'Cuenta de acceso remoto antigua que seguía activa: vector de entrada del caso real.', 'TI', 'TI-VPN', 'ADC', 'A01', 37, 1, 3, TRUE, TRUE, TRUE, FALSE),
-  ('VPN-GW01', 'Gateway VPN con MFA', 'Concentrador VPN + RADIUS con código TOTP', 'Acceso remoto vigente de los empleados.', 'TI', 'TI-VPN', 'ADC', 'A01', 36, 1, 4, TRUE, FALSE, FALSE, FALSE),
-  ('SW-CORE01', 'Switch núcleo', 'Switch L3 de núcleo (par redundante)', 'Interconecta los racks de la red corporativa.', 'TI', NULL, 'ADC', 'A01', 33, 2, 5, FALSE, FALSE, FALSE, FALSE),
-  ('PRX-WEB01', 'Proxy web', 'Proxy y filtro de navegación', 'Navegación segura de los empleados.', 'TI', NULL, 'ADC', 'A01', 31, 1, 2, TRUE, FALSE, FALSE, FALSE),
-  ('SEC-SIEM01', 'SIEM', 'SIEM con correlación de registros', 'Centraliza los registros y alertas de seguridad.', 'TI', NULL, 'ADC', 'A01', 28, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('SEC-EDR01', 'Consola EDR', 'Plataforma EDR (consola de gestión)', 'Detecta y contiene malware en servidores y equipos.', 'TI', NULL, 'ADC', 'A01', 26, 1, 4, FALSE, FALSE, FALSE, TRUE),
-  ('AD-DC01', 'Controlador de dominio 1', 'Windows Server 2019 · Active Directory', 'Autenticación y políticas de todas las cuentas.', 'TI', 'TI-AD', 'ADC', 'A02', 40, 1, 5, FALSE, FALSE, FALSE, TRUE),
-  ('AD-DC02', 'Controlador de dominio 2', 'Windows Server 2019 · Active Directory', 'Réplica del dominio para alta disponibilidad.', 'TI', 'TI-AD', 'ADC', 'A02', 39, 1, 5, FALSE, FALSE, FALSE, TRUE),
-  ('PKI-CA01', 'Autoridad certificadora', 'Windows Server · AD Certificate Services', 'Certificados internos de servidores y de la VPN.', 'TI', 'TI-AD', 'ADC', 'A02', 37, 1, 4, FALSE, FALSE, FALSE, TRUE),
-  ('MAIL-EX01', 'Servidor de correo', 'Microsoft Exchange Server', 'Correo corporativo interno y externo.', 'TI', 'TI-MAIL', 'ADC', 'A02', 34, 2, 2, TRUE, FALSE, FALSE, FALSE),
-  ('FS-01', 'Servidor de archivos', 'Windows Server · DFS', 'Carpetas compartidas de las áreas.', 'TI', NULL, 'ADC', 'A02', 31, 2, 3, FALSE, FALSE, FALSE, FALSE),
-  ('ERP-APP01', 'ERP · aplicación', 'SAP S/4HANA (servidor de aplicaciones)', 'Finanzas, compras y logística.', 'TI', 'TI-ERP', 'ADC', 'A03', 38, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('ERP-DB01', 'ERP · base de datos', 'SAP HANA', 'Base de datos en memoria del ERP.', 'TI', 'TI-ERP', 'ADC', 'A03', 34, 3, 4, FALSE, FALSE, FALSE, TRUE),
-  ('FACT-APP01', 'Facturación · aplicación', 'Aplicación de facturación por volumen (desarrollo propio)', 'Calcula y emite las facturas de lo entregado a cada cliente.', 'TI', 'TI-FACT', 'ADC', 'A03', 30, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('FACT-DB01', 'Facturación · base de datos', 'Microsoft SQL Server', 'Clientes, contratos y volúmenes medidos.', 'TI', 'TI-FACT', 'ADC', 'A03', 27, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('FACT-WEB01', 'Portal de clientes', 'Portal web de transportistas (IIS)', 'Consulta de entregas y facturas por los clientes.', 'TI', 'TI-FACT', 'ADC', 'A03', 25, 1, 3, TRUE, FALSE, FALSE, FALSE),
-  ('VMW-VC01', 'vCenter', 'VMware vCenter Server', 'Administra los hosts de virtualización.', 'TI', NULL, 'ADC', 'A04', 40, 1, 5, FALSE, FALSE, FALSE, TRUE),
-  ('VMW-ESX01', 'Host de virtualización 1', 'VMware ESXi (servidor 2U)', 'Ejecuta las máquinas virtuales de TI.', 'TI', NULL, 'ADC', 'A04', 36, 2, 5, FALSE, FALSE, FALSE, FALSE),
-  ('VMW-ESX02', 'Host de virtualización 2', 'VMware ESXi (servidor 2U)', 'Ejecuta las máquinas virtuales de TI.', 'TI', NULL, 'ADC', 'A04', 34, 2, 5, FALSE, FALSE, FALSE, FALSE),
-  ('VMW-ESX03', 'Host de virtualización 3', 'VMware ESXi (servidor 2U)', 'Capacidad de reserva para recuperar servicios.', 'TI', NULL, 'ADC', 'A04', 32, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('BKP-VBR01', 'Servidor de respaldos', 'Veeam Backup & Replication', 'Orquesta las copias de seguridad.', 'TI', 'TI-BKP', 'ADC', 'A04', 28, 1, 5, FALSE, FALSE, FALSE, TRUE),
-  ('BKP-REPO01', 'Repositorio inmutable', 'Repositorio Linux endurecido (copias inmutables)', 'Copias que no se pueden borrar ni cifrar durante su retención.', 'TI', 'TI-BKP', 'ADC', 'A04', 23, 4, 5, FALSE, FALSE, FALSE, FALSE),
-  ('BKP-LTO01', 'Librería de cintas', 'Librería de cintas LTO (copia fuera de línea)', 'Copia desconectada de la red (regla 3-2-1).', 'TI', 'TI-BKP', 'ADC', 'A04', 18, 3, 4, FALSE, FALSE, FALSE, FALSE),
-  ('OT-FW01', 'Firewall TI/OT', 'Firewall industrial (DMZ entre TI y OT)', 'Única puerta entre la red corporativa y la red de control.', 'OT', 'OT-SCADA', 'ALP', 'B01', 40, 1, 5, FALSE, FALSE, FALSE, FALSE),
-  ('SCD-P01', 'SCADA · primario', 'Servidor SCADA de oleoductos (redundante)', 'Supervisa presiones, caudales y válvulas en tiempo real.', 'OT', 'OT-SCADA', 'ALP', 'B01', 37, 2, 5, FALSE, FALSE, FALSE, TRUE),
-  ('SCD-S01', 'SCADA · respaldo', 'Servidor SCADA de oleoductos (redundante)', 'Toma el control si falla el primario.', 'OT', 'OT-SCADA', 'ALP', 'B01', 34, 2, 5, FALSE, FALSE, FALSE, TRUE),
-  ('HIS-PI01', 'Historian', 'AVEVA PI Server (historian)', 'Historia de presiones y caudales de cada tramo.', 'OT', 'OT-SCADA', 'ALP', 'B01', 31, 2, 4, FALSE, FALSE, FALSE, FALSE),
-  ('LDS-01', 'Detección de fugas', 'Sistema de detección de fugas (modelo hidráulico en línea)', 'Compara caudales para detectar fugas.', 'OT', 'OT-SCADA', 'ALP', 'B01', 28, 1, 5, FALSE, FALSE, FALSE, FALSE),
-  ('HMI-01', 'Consola de operador 1', 'Estación HMI de operación', 'Pantallas de los operadores del centro de control.', 'OT', 'OT-SCADA', 'ALP', 'B01', 25, 1, 4, FALSE, FALSE, FALSE, FALSE),
-  ('HMI-02', 'Consola de operador 2', 'Estación HMI de operación', 'Pantallas de los operadores del centro de control.', 'OT', 'OT-SCADA', 'ALP', 'B01', 24, 1, 4, FALSE, FALSE, FALSE, FALSE),
-  ('ENG-WS01', 'Estación de ingeniería', 'Estación de programación de PLC/RTU', 'Modifica la lógica de control: acceso muy restringido.', 'OT', 'OT-SCADA', 'ALP', 'B01', 22, 1, 5, FALSE, FALSE, FALSE, TRUE),
-  ('FEP-01', 'Procesador de comunicaciones', 'Front-end processor DNP3/Modbus', 'Habla con las RTU de las estaciones de bombeo.', 'OT', 'OT-SCADA', 'ALP', 'B02', 40, 2, 5, FALSE, FALSE, FALSE, FALSE),
-  ('RTU-T1', 'Enlace de campo · Tramo 1', 'Router industrial + enlace MPLS/satelital', 'Comunicación con las estaciones Houston–Atlanta.', 'OT', 'OT-T1', 'ALP', 'B02', 36, 1, 5, FALSE, FALSE, FALSE, FALSE),
-  ('RTU-T2', 'Enlace de campo · Tramo 2', 'Router industrial + enlace MPLS/satelital', 'Comunicación con las estaciones Atlanta–Greensboro.', 'OT', 'OT-T2', 'ALP', 'B02', 35, 1, 5, FALSE, FALSE, FALSE, FALSE),
-  ('RTU-T3', 'Enlace de campo · Tramo 3', 'Router industrial + enlace MPLS/satelital', 'Comunicación con las estaciones Greensboro–Linden.', 'OT', 'OT-T3', 'ALP', 'B02', 34, 1, 5, FALSE, FALSE, FALSE, FALSE),
-  ('MED-01', 'Medición fiscal', 'Servidor de medición de transferencia de custodia', 'Volúmenes entregados a cada cliente: la facturación depende de estos datos.', 'OT', 'TI-FACT', 'ALP', 'B02', 31, 2, 5, FALSE, FALSE, FALSE, FALSE),
-  ('NTP-OT01', 'Reloj GPS', 'Servidor de tiempo GPS', 'Sincroniza la hora de SCADA y de la medición.', 'OT', NULL, 'ALP', 'B02', 29, 1, 3, FALSE, FALSE, FALSE, FALSE)
-  ) AS v (codigo, nombre, plataforma, funcion, red, servicio, ubicacion, rack, u, alto, criticidad, expuesto, sin_mfa, sin_soporte, privilegiado)
-  JOIN ubicaciones u ON u.codigo = v.ubicacion
-  LEFT JOIN servicios s ON s.codigo = v.servicio
+  ('L1-T1', 'Línea 1 · Houston – Atlanta', 'tramo', 'OT', 'OT-T1', 'L1', 'HOU', 'ATL', ARRAY['OPE', 'MER', 'BOL', 'BHM'], 40, 1500000, 'Gasolina', 'Primer segmento de la línea de gasolina.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('L2-T1', 'Línea 2 · Houston – Atlanta', 'tramo', 'OT', 'OT-T1', 'L2', 'HOU', 'ATL', ARRAY['OPE', 'MER', 'BOL', 'BHM'], 36, 1200000, 'Destilados: diésel, combustible de aviación y de calefacción', 'Primer segmento de la línea de destilados.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('L1-T2', 'Línea 1 · Atlanta – Greensboro', 'tramo', 'OT', 'OT-T2', 'L1', 'ATL', 'GSO', ARRAY['BEL', 'SPA', 'CLT'], 40, 1500000, 'Gasolina', 'Segundo segmento de la línea de gasolina, hasta el patio de Greensboro.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('L2-T2', 'Línea 2 · Atlanta – Greensboro', 'tramo', 'OT', 'OT-T2', 'L2', 'ATL', 'GSO', ARRAY['BEL', 'SPA', 'CLT'], 36, 1200000, 'Destilados: diésel, combustible de aviación y de calefacción', 'Segundo segmento de la línea de destilados, hasta el patio de Greensboro.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('L3-T3', 'Línea 3 · Greensboro – Linden', 'tramo', 'OT', 'OT-T3', 'L3', 'GSO', 'LIN', ARRAY['MIT'], NULL, 885000, 'Todos los productos', 'Lleva todos los productos de Greensboro al patio de Linden, NJ.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('L4-T3', 'Línea 4 · Greensboro – Woodbine', 'tramo', 'OT', 'OT-T3', 'L4', 'GSO', 'DOR', '{}'::TEXT[], 32, 700000, 'Productos refinados', 'De Greensboro a Dorsey Junction (Woodbine, MD), hacia Baltimore.', NULL, ARRAY['mckinsey', 'fox0510', 'colmap0513']),
+  ('LAT-NAS', 'Ramal Atlanta – Nashville', 'tramo', 'OT', 'OT-T1', 'LAT', 'ATL', 'NAS', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Atlanta–Tennessee.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-KNX', 'Ramal Atlanta – Knoxville', 'tramo', 'OT', 'OT-T1', 'LAT', 'ATL', 'KNX', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Atlanta–Tennessee.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-MAC', 'Ramal Atlanta – Macon', 'tramo', 'OT', 'OT-T1', 'LAT', 'ATL', 'MAC', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Atlanta–sur de Georgia.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-BAI', 'Ramal Macon – Bainbridge', 'tramo', 'OT', 'OT-T1', 'LAT', 'MAC', 'BAI', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Atlanta–sur de Georgia.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-AUG', 'Conexión a Augusta', 'tramo', 'OT', 'OT-T2', 'LAT', 'BEL', 'AUG', '{}'::TEXT[], NULL, NULL, NULL, 'Conexión esquemática al nodo de línea principal más cercano: la ruta real no se publica.', NULL, ARRAY['colmap0513']),
+  ('LAT-SEL', 'Ramal Greensboro – Selma', 'tramo', 'OT', 'OT-T3', 'LAT', 'GSO', 'SEL', '{}'::TEXT[], NULL, NULL, NULL, 'Ramal Greensboro–Raleigh/Durham.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-RIC', 'Ramal Mitchell – Richmond', 'tramo', 'OT', 'OT-T3', 'LAT', 'MIT', 'RIC', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Mitchell–Richmond/Norfolk.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-NOR', 'Ramal Richmond – Norfolk', 'tramo', 'OT', 'OT-T3', 'LAT', 'RIC', 'NOR', '{}'::TEXT[], NULL, NULL, NULL, 'Parte del ramal Mitchell–Richmond/Norfolk.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('LAT-BAL', 'Conexión Dorsey – Baltimore', 'tramo', 'OT', 'OT-T3', 'LAT', 'DOR', 'BAL', '{}'::TEXT[], NULL, NULL, NULL, 'Entrega de la Línea 4 en el área de Baltimore.', NULL, ARRAY['mckinsey', 'colmap0513']),
+  ('VPN-LEGADA', 'Perfil VPN heredado', 'sistema', 'TI', 'TI-VPN', NULL, NULL, NULL, '{}'::TEXT[], NULL, NULL, NULL, 'Acceso remoto a la red corporativa.', 'Perfil que no debía estar en uso y solo pedía una contraseña, sin MFA: por ahí entró el atacante.', ARRAY['blount', 'insjournal']),
+  ('FACT-SIS', 'Facturación y contabilidad', 'sistema', 'TI', 'TI-FACT', NULL, NULL, NULL, '{}'::TEXT[], NULL, NULL, NULL, 'Factura a cada cliente el volumen entregado.', 'Fue de los sistemas TI afectados; sin facturación no se podía cobrar lo entregado.', ARRAY['techtarget', 'spg0508']),
+  ('SCADA-CTL', 'Centro de control y SCADA', 'sistema', 'OT', 'OT-SCADA', NULL, NULL, NULL, '{}'::TEXT[], NULL, NULL, NULL, 'Supervisa y opera el bombeo de toda la red.', 'No fue comprometido directamente; su supervisor emitió la orden de paro para que el malware no llegara a OT.', ARRAY['blount', 'techtarget'])
+  ) AS v (codigo, nombre, tipo, red, servicio, linea, desde, hasta, paradas, diametro, capacidad, producto, descripcion, hallazgo, fuentes)
+  JOIN servicios s ON s.codigo = v.servicio
+  LEFT JOIN ubicaciones d ON d.codigo = v.desde
+  LEFT JOIN ubicaciones h ON h.codigo = v.hasta
 ON CONFLICT (codigo) DO UPDATE SET
-  nombre = EXCLUDED.nombre, plataforma = EXCLUDED.plataforma, funcion = EXCLUDED.funcion, red = EXCLUDED.red,
-  servicio_id = EXCLUDED.servicio_id, ubicacion_id = EXCLUDED.ubicacion_id, rack = EXCLUDED.rack,
-  u_inicio = EXCLUDED.u_inicio, u_alto = EXCLUDED.u_alto, criticidad = EXCLUDED.criticidad,
-  expuesto_internet = EXCLUDED.expuesto_internet, sin_mfa = EXCLUDED.sin_mfa,
-  sin_soporte = EXCLUDED.sin_soporte, privilegiado = EXCLUDED.privilegiado;
+  nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, red = EXCLUDED.red, servicio_id = EXCLUDED.servicio_id,
+  linea = EXCLUDED.linea, desde_id = EXCLUDED.desde_id, hasta_id = EXCLUDED.hasta_id, paradas = EXCLUDED.paradas,
+  diametro_pulg = EXCLUDED.diametro_pulg, capacidad_bpd = EXCLUDED.capacidad_bpd, producto = EXCLUDED.producto,
+  descripcion = EXCLUDED.descripcion, hallazgo = EXCLUDED.hallazgo, fuentes = EXCLUDED.fuentes;
 
 COMMIT;

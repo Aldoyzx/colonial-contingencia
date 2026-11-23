@@ -1,9 +1,10 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ASSETS, LOCATIONS, RACKS, RACK_UNITS } from '../src/db/seedData.js';
+import { ASSETS, LOCATIONS } from '../src/db/seedData.js';
 import { BusinessRuleError, ForbiddenError } from '../src/domain/errors.js';
-import { assessRisk, heatLevel } from '../src/domain/risk.js';
-import { getAsset, getDataCenterMap, getPipelineMap, isolateAsset, releaseAsset } from '../src/services/assetService.js';
+import { CASE_TIMELINE, CHECKLISTS, caseStateOf, checklistFor, impactLevel } from '../src/domain/pipeline.js';
+import { SOURCES } from '../src/domain/sources.js';
+import { getAsset, getPipelineMap, isolateAsset, releaseAsset } from '../src/services/assetService.js';
 import { recordHistory } from '../src/services/historyService.js';
 import { verifyLedger } from '../src/services/ledgerService.js';
 import { advanceIncident, createIncident, decideIncident } from '../src/services/incidentService.js';
@@ -13,6 +14,9 @@ import { EMAILS, startServer } from './httpHelpers.js';
 
 const assetId = async (db, codigo) => (await db.one('SELECT id FROM activos WHERE codigo = $1', [codigo])).id;
 const isolatedCodes = async (db) => (await db.many('SELECT codigo FROM activos WHERE aislado ORDER BY codigo')).map((r) => r.codigo);
+const allPoints = (element) => checklistFor(element).map((_, i) => i);
+const OK_TI = { resultado: 'ok', confirmados: allPoints({ tipo: 'sistema', red: 'TI' }) };
+const OK_TRAMO = { resultado: 'ok', confirmados: allPoints({ tipo: 'tramo' }) };
 
 /** Incidente registrado y llevado hasta D1 = Sí (red OT detenida). */
 async function incidentWithOtStopped(db, users) {
@@ -23,158 +27,180 @@ async function incidentWithOtStopped(db, users) {
   return decideIncident(db, detail.id, { respuesta: true, justificacion: 'Riesgo de propagación a SCADA' }, users.coordinador);
 }
 
-describe('Inventario de sistemas e instalaciones', () => {
-  test('cada activo cabe en su rack, no se solapa con otro y está en la ubicación del rack', () => {
-    const rackOf = Object.fromEntries(RACKS.map((r) => [r.codigo, r]));
-    for (const a of ASSETS) {
-      assert.ok(rackOf[a.rack], `${a.codigo}: rack ${a.rack} no existe`);
-      assert.equal(a.ubicacion, rackOf[a.rack].ubicacion, `${a.codigo} está en otra ubicación que su rack`);
-      assert.ok(a.u >= 1 && a.u + a.alto - 1 <= RACK_UNITS, `${a.codigo} se sale del rack`);
+describe('Red del oleoducto con fuentes', () => {
+  test('cada instalación, tramo, sistema, punto de verificación y día del caso cita fuentes existentes', () => {
+    const cited = [
+      ...LOCATIONS.map((l) => [l.codigo, l.fuentes]),
+      ...ASSETS.map((a) => [a.codigo, a.fuentes]),
+      ...Object.values(CHECKLISTS).flat().map((c) => [c.texto, c.fuentes]),
+      ...CASE_TIMELINE.map((d) => [d.fecha, d.fuentes]),
+    ];
+    for (const [what, fuentes] of cited) {
+      assert.ok(fuentes?.length > 0, `${what} no tiene fuente`);
+      for (const key of fuentes) assert.ok(SOURCES[key], `${what} cita una fuente desconocida: ${key}`);
     }
-    for (const rack of RACKS) {
-      const used = new Map();
-      ASSETS.filter((a) => a.rack === rack.codigo).forEach((a) => {
-        for (let u = a.u; u < a.u + a.alto; u += 1) {
-          assert.ok(!used.has(u), `${a.codigo} y ${used.get(u)} ocupan la U${u} de ${rack.codigo}`);
-          used.set(u, a.codigo);
-        }
-      });
-    }
+    for (const source of Object.values(SOURCES)) assert.match(source.url, /^https:\/\//);
   });
 
-  test('la base tiene las instalaciones reales de la red y los activos de referencia', async () => {
+  test('los tramos unen instalaciones existentes y solo llevan datos publicados', () => {
+    const codes = new Set(LOCATIONS.map((l) => l.codigo));
+    for (const t of ASSETS.filter((a) => a.tipo === 'tramo')) {
+      for (const code of [t.desde, t.hasta, ...t.paradas]) assert.ok(codes.has(code), `${t.codigo}: ${code} no existe`);
+      if (t.linea === 'LAT') assert.equal(t.capacidad, null, `${t.codigo}: la capacidad de los ramales no es pública`);
+    }
+    const capacity = Object.fromEntries(ASSETS.filter((a) => a.linea && a.linea !== 'LAT').map((a) => [a.linea, a.capacidad]));
+    assert.deepEqual(capacity, { L1: 1_500_000, L2: 1_200_000, L3: 885_000, L4: 700_000 });
+  });
+
+  test('la base tiene la red completa: de Houston a Linden, con coordenadas válidas', async () => {
     const { db } = await setup();
     const { total } = await db.one('SELECT count(*) AS total FROM activos');
     assert.equal(total, ASSETS.length);
-    const line = await db.many('SELECT codigo FROM ubicaciones WHERE km_aprox IS NOT NULL ORDER BY km_aprox');
-    assert.deepEqual(line.map((l) => l.codigo), LOCATIONS.filter((l) => l.km !== null).map((l) => l.codigo));
-    assert.equal(line[0].codigo, 'HOU');
-    assert.equal(line.at(-1).codigo, 'LIN');
+    const ends = await db.many(`SELECT codigo, tipo FROM ubicaciones WHERE tipo IN ('origen', 'terminal') ORDER BY longitud`);
+    assert.deepEqual(ends.map((e) => e.codigo), ['HOU', 'LIN']);
+    await assert.rejects(
+      db.query(`UPDATE ubicaciones SET fuentes = '{}' WHERE codigo = 'HOU'`),
+      /ck_ubicaciones_fuentes/,
+      'una instalación sin fuente se rechaza'
+    );
   });
 });
 
-describe('Riesgo y escala de calor', () => {
-  test('la escala tiene 6 niveles como el mapa de calor del rack', () => {
-    assert.deepEqual([0, 0.01, 0.2, 0.21, 0.6, 0.8, 0.81, 1].map(heatLevel), [0, 1, 1, 2, 3, 4, 5, 5]);
+describe('Impacto y escala de calor', () => {
+  test('el calor sale de la capacidad publicada; sin dato no se inventa', () => {
+    const stopped = (capacidad_bpd, extra = {}) => impactLevel({ tipo: 'tramo', capacidad_bpd, servicio_estado: 'afectado', ...extra });
+    assert.deepEqual([1_500_000, 1_200_000, 885_000, 700_000].map((c) => stopped(c)), [5, 4, 3, 3]);
+    assert.equal(stopped(null), null);
+    assert.equal(stopped(1_500_000, { servicio_estado: 'operativo' }), 0);
+    assert.equal(stopped(1_500_000, { servicio_estado: 'operativo', aislado: true }), 5);
+    assert.equal(stopped(1_500_000, { servicio_estado: 'en_recuperacion' }), 1);
+    assert.equal(impactLevel({ tipo: 'sistema', servicio_estado: 'afectado' }), null);
   });
 
-  test('la VPN heredada ya era riesgo alto antes del ataque y queda en rojo al caer su servicio', () => {
-    const vpn = { criticidad: 3, expuesto_internet: true, sin_mfa: true, sin_soporte: true, privilegiado: false, aislado: false };
-    const normal = assessRisk(vpn, 'operativo');
-    assert.equal(normal.puntaje, 0.7);
-    assert.equal(normal.nivel, 4);
-    assert.equal(assessRisk(vpn, 'afectado').nivel, 5);
-    const isolated = assessRisk({ ...vpn, aislado: true }, 'afectado');
-    assert.ok(isolated.puntaje < 0.8, 'aislarlo elimina su exposición');
-    assert.ok(!isolated.factores.some((f) => f.clave === 'expuesto' || f.clave === 'sinMfa'));
+  test('la reproducción del caso sigue lo publicado día por día', () => {
+    const lateral = { tipo: 'tramo', codigo: 'LAT-NAS', linea: 'LAT' };
+    const line4 = { tipo: 'tramo', codigo: 'L4-T3', linea: 'L4' };
+    const line1 = { tipo: 'tramo', codigo: 'L1-T1', linea: 'L1' };
+    const day = (fecha) => CASE_TIMELINE.find((d) => d.fecha === fecha);
+    assert.equal(caseStateOf(day('2021-05-07'), lateral), 'detenido');
+    assert.equal(caseStateOf(day('2021-05-09'), lateral), 'parcial');
+    assert.equal(caseStateOf(day('2021-05-09'), line1), 'detenido');
+    assert.equal(caseStateOf(day('2021-05-10'), line4), 'manual');
+    assert.equal(caseStateOf(day('2021-05-10'), line1), 'detenido');
+    assert.equal(caseStateOf(day('2021-05-13'), line1), 'operativo');
   });
 });
 
-describe('Aislamiento automático en rojo', () => {
-  test('al registrar el incidente se aíslan solo los activos que quedan en rojo', async () => {
+describe('Aislamiento automático', () => {
+  test('al registrar el incidente se aíslan los sistemas de los servicios afectados', async () => {
     const { db, users } = await setup();
     const detail = await createIncident(db, await baseIncident(db), users.coordinador);
-    assert.deepEqual(await isolatedCodes(db), ['VPN-GW01', 'VPN-LEGADO']);
-    const vpn = await getAsset(db, await assetId(db, 'VPN-LEGADO'));
-    assert.match(vpn.aislado_motivo, /^Aislamiento automático: riesgo 100% al quedar afectado TI-VPN/);
+    assert.deepEqual(await isolatedCodes(db), ['FACT-SIS', 'VPN-LEGADA']);
+    const vpn = await getAsset(db, await assetId(db, 'VPN-LEGADA'));
+    assert.match(vpn.aislado_motivo, /^Aislamiento automático: desconectado de la red al quedar afectado TI-VPN/);
+    assert.equal(vpn.estado, 'aislado');
     const events = await db.many(`SELECT evento FROM historial_recuperacion WHERE incidente_id = $1 AND evento = 'activo_aislado'`, [detail.id]);
     assert.equal(events.length, 2);
   });
 
-  test('D1 = Sí aísla los servidores SCADA y la estación de ingeniería, no toda la red OT', async () => {
+  test('D1 = Sí detiene toda la red, como el 7 de mayo: tramos, ramales y SCADA aislados', async () => {
     const { db, users } = await setup();
     await incidentWithOtStopped(db, users);
     const isolated = await isolatedCodes(db);
-    for (const code of ['SCD-P01', 'SCD-S01', 'ENG-WS01']) assert.ok(isolated.includes(code), `${code} debe quedar aislado`);
-    for (const code of ['OT-FW01', 'HIS-PI01', 'RTU-T1']) assert.ok(!isolated.includes(code), `${code} no llega a rojo`);
+    assert.equal(isolated.length, ASSETS.length, 'todos los elementos quedan aislados');
+    const map = await getPipelineMap(db);
+    assert.equal(map.resumen.lineasDetenidas, 4);
+    const l1 = map.tramos.find((t) => t.codigo === 'L1-T1');
+    assert.match(l1.aislado_motivo, /válvulas cerradas/);
+    assert.equal(l1.nivelCalor, 5);
+    assert.equal(l1.bpdDetenidos, 1_500_000);
+    assert.equal(map.tramos.find((t) => t.codigo === 'LAT-NAS').nivelCalor, null);
   });
 });
 
 describe('Aislamiento manual y reconexión', () => {
-  test('cada rol solo aísla activos de su red', async () => {
+  test('cada rol solo aísla elementos de su red', async () => {
     const { db, users } = await setup();
-    const scada = await assetId(db, 'HIS-PI01');
-    await assert.rejects(isolateAsset(db, scada, { motivo: 'Tráfico anómalo hacia el historian' }, users.legal), ForbiddenError);
-    await assert.rejects(isolateAsset(db, scada, { motivo: 'Tráfico anómalo hacia el historian' }, users.analistaTi), ForbiddenError);
-    const result = await isolateAsset(db, scada, { motivo: 'Tráfico anómalo hacia el historian' }, users.operadorOt);
+    const line3 = await assetId(db, 'L3-T3');
+    const motivo = 'Caída de presión no explicada en el tramo';
+    await assert.rejects(isolateAsset(db, line3, { motivo }, users.legal), ForbiddenError);
+    await assert.rejects(isolateAsset(db, line3, { motivo }, users.analistaTi), ForbiddenError);
+    const result = await isolateAsset(db, line3, { motivo }, users.operadorOt);
     assert.equal(result.aislado, true);
     assert.equal(result.aislado_por_nombre, 'Lucía Paredes');
-    await assert.rejects(isolateAsset(db, scada, { motivo: 'Segundo intento de aislamiento' }, users.operadorOt), BusinessRuleError);
+    assert.equal(result.nivelCalor, 3);
+    await assert.rejects(isolateAsset(db, line3, { motivo: 'Segundo intento de aislamiento' }, users.operadorOt), BusinessRuleError);
   });
 
-  test('no se reconecta sin una verificación OK posterior al aislamiento', async () => {
+  test('no se reconecta sin una verificación OK, con todos los puntos, posterior al aislamiento', async () => {
     const { db, users } = await setup();
     await createIncident(db, await baseIncident(db), users.coordinador);
-    const vpn = await assetId(db, 'VPN-LEGADO');
+    const vpn = await assetId(db, 'VPN-LEGADA');
     await assert.rejects(releaseAsset(db, vpn, {}, users.analistaTi), /ronda de verificación/);
 
     let round = await startRound(db, { alcance: 'aislados' }, users.analistaTi);
     assert.equal(round.items.length, 2);
-    round = await recordCheck(db, round.id, vpn, { resultado: 'falla', nota: 'La cuenta heredada sigue habilitada' }, users.analistaTi);
+    assert.equal(round.items[0].checklist.length, 4);
+    round = await recordCheck(db, round.id, vpn, { resultado: 'falla', nota: 'El perfil heredado sigue habilitado' }, users.analistaTi);
     await assert.rejects(releaseAsset(db, vpn, {}, users.analistaTi), /ronda de verificación/);
 
-    await recordCheck(db, round.id, vpn, { resultado: 'ok' }, users.analistaTi);
-    const released = await releaseAsset(db, vpn, { nota: 'Cuenta eliminada; acceso solo por el gateway con MFA' }, users.analistaTi);
+    await assert.rejects(recordCheck(db, round.id, vpn, { resultado: 'ok', confirmados: [0, 1] }, users.analistaTi), /Falta: Parches críticos/);
+    await assert.rejects(recordCheck(db, round.id, vpn, { resultado: 'ok', confirmados: [0, 1, 2, 3, 7] }, users.analistaTi), /tiene 4 puntos/);
+    await recordCheck(db, round.id, vpn, OK_TI, users.analistaTi);
+    const released = await releaseAsset(db, vpn, { nota: 'Perfil eliminado; acceso solo con MFA' }, users.analistaTi);
     assert.equal(released.aislado, false);
     assert.equal(released.historial[0].evento, 'activo_liberado');
   });
 });
 
 describe('Rondas de verificación', () => {
-  test('una ronda no se cierra con activos pendientes y registra el resumen', async () => {
+  test('una ronda por línea no se cierra con elementos pendientes y registra el resumen', async () => {
     const { db, users } = await setup();
-    const round = await startRound(db, { alcance: 'rack', valor: 'A02' }, users.analistaTi);
-    assert.equal(round.items.length, 5);
-    await assert.rejects(closeRound(db, round.id, users.analistaTi), /Faltan 5 activo/);
+    const round = await startRound(db, { alcance: 'linea', valor: 'L1' }, users.operadorOt);
+    assert.deepEqual(round.items.map((i) => i.codigo), ['L1-T1', 'L1-T2']);
+    assert.match(round.items[0].checklist[0].texto, /Derecho de vía/);
+    await assert.rejects(closeRound(db, round.id, users.operadorOt), /Faltan 2 elemento/);
 
-    for (const item of round.items) {
-      const resultado = item.codigo === 'MAIL-EX01' ? 'observado' : 'ok';
-      await recordCheck(db, round.id, item.activo_id, { resultado, nota: resultado === 'ok' ? undefined : 'Parche pendiente en Exchange' }, users.analistaTi);
-    }
-    await assert.rejects(closeRound(db, round.id, users.operadorOt), /Solo quien inició la ronda/);
-    const closed = await closeRound(db, round.id, users.analistaTi);
+    await recordCheck(db, round.id, round.items[0].activo_id, OK_TRAMO, users.operadorOt);
+    await recordCheck(db, round.id, round.items[1].activo_id, { resultado: 'observado', confirmados: [0, 1], nota: 'Falta probar la operación manual' }, users.operadorOt);
+    await assert.rejects(closeRound(db, round.id, users.analistaTi), /Solo quien inició la ronda/);
+    const closed = await closeRound(db, round.id, users.operadorOt);
     assert.ok(closed.cerrada_en);
-    assert.equal(closed.ok, 4);
+    assert.equal(closed.ok, 1);
     assert.equal(closed.observados, 1);
-    await assert.rejects(recordCheck(db, round.id, round.items[0].activo_id, { resultado: 'ok' }, users.analistaTi), /ya está cerrada/);
+    assert.deepEqual(closed.items[1].confirmados, [0, 1]);
+    await assert.rejects(recordCheck(db, round.id, round.items[0].activo_id, OK_TRAMO, users.operadorOt), /ya está cerrada/);
   });
 
-  test('cada activo lo verifica el rol de su red y lo observado exige nota', async () => {
+  test('cada elemento lo verifica el rol de su red y lo observado exige nota', async () => {
     const { db, users } = await setup();
     const round = await startRound(db, { alcance: 'servicio', valor: 'OT-SCADA' }, users.coordinador);
-    const scada = round.items.find((i) => i.codigo === 'SCD-P01');
-    await assert.rejects(recordCheck(db, round.id, scada.activo_id, { resultado: 'ok' }, users.analistaTi), ForbiddenError);
+    const scada = round.items.find((i) => i.codigo === 'SCADA-CTL');
+    assert.match(scada.checklist[0].texto, /Segmentación TI\/OT/);
+    await assert.rejects(recordCheck(db, round.id, scada.activo_id, OK_TRAMO, users.analistaTi), ForbiddenError);
     await assert.rejects(recordCheck(db, round.id, scada.activo_id, { resultado: 'observado' }, users.operadorOt), /Explica/);
     await assert.rejects(startRound(db, { alcance: 'aislados' }, users.legal), ForbiddenError);
-    await assert.rejects(startRound(db, { alcance: 'aislados' }, users.coordinador), /No hay activos aislados/);
+    await assert.rejects(startRound(db, { alcance: 'aislados' }, users.coordinador), /No hay elementos aislados/);
   });
 });
 
-describe('Mapas de calor', () => {
-  test('el mapa del centro de datos agrupa los activos por rack con su riesgo', async () => {
-    const { db, users } = await setup();
-    await incidentWithOtStopped(db, users);
-    const map = await getDataCenterMap(db);
-    assert.equal(map.racks.length, RACKS.length);
-    assert.equal(map.racks.reduce((n, r) => n + r.activos.length, 0), ASSETS.length);
-    assert.equal(map.resumen.aislados, 5);
-    const legacy = map.racks.find((r) => r.codigo === 'A01').activos.find((a) => a.codigo === 'VPN-LEGADO');
-    assert.equal(legacy.servicio_estado, 'afectado');
-    assert.ok(legacy.riesgo.factores.length > 0);
-  });
-
-  test('el mapa del oleoducto ordena las instalaciones y pinta los tramos por estado', async () => {
+describe('Mapa de calor de la red', () => {
+  test('entrega instalaciones, tramos, sistemas, el caso real y las fuentes', async () => {
     const { db, users } = await setup();
     let map = await getPipelineMap(db);
-    assert.equal(map.instalaciones.length, 10);
-    assert.equal(map.tramos.length, 9);
-    assert.ok(map.tramos.every((t) => t.servicio_estado === 'operativo'));
+    assert.equal(map.instalaciones.length, LOCATIONS.length);
+    assert.equal(map.tramos.length, 15);
+    assert.deepEqual(map.sistemas.map((s) => s.codigo).sort(), ['FACT-SIS', 'SCADA-CTL', 'VPN-LEGADA']);
+    assert.ok(map.tramos.every((t) => t.estado === 'operativo' && t.nivelCalor === 0));
+    assert.equal(map.caso.dias.length, 5);
+    assert.equal(map.caso.dias[2].tramos['L4-T3'], 'manual');
+    assert.ok(map.fuentes.blount.url.includes('senate.gov'));
 
     await incidentWithOtStopped(db, users);
     map = await getPipelineMap(db);
-    assert.ok(map.tramos.every((t) => t.servicio_estado === 'afectado'));
-    const control = map.centros.find((c) => c.codigo === 'ALP');
-    assert.equal(control.aislados, 3);
+    assert.ok(map.tramos.every((t) => t.estado === 'aislado'));
+    assert.equal(map.resumen.aislados, ASSETS.length);
+    assert.equal(map.resumen.sinVerificar, ASSETS.length);
   });
 });
 
@@ -220,7 +246,7 @@ describe('Bitácora encadenada con SHA-256', () => {
   });
 });
 
-describe('API de mapas, rondas y bitácora', () => {
+describe('API de mapa, rondas y bitácora', () => {
   let ctx;
   before(async () => {
     const { db } = await setup();
@@ -230,44 +256,39 @@ describe('API de mapas, rondas y bitácora', () => {
 
   test('exige sesión', async () => {
     const anon = ctx.client();
-    assert.equal((await anon.call('/mapas/centro-datos')).status, 401);
+    assert.equal((await anon.call('/mapas/oleoducto')).status, 401);
     assert.equal((await anon.call('/bitacora/verificar')).status, 401);
   });
 
   test('aislar, verificar en ronda y reconectar por HTTP', async () => {
-    const ti = ctx.client();
-    await ti.login(EMAILS.analistaTi);
-    const map = await ti.call('/mapas/centro-datos');
+    const ot = ctx.client();
+    await ot.login(EMAILS.operadorOt);
+    const map = await ot.call('/mapas/oleoducto');
     assert.equal(map.status, 200);
-    const mail = map.body.racks.flatMap((r) => r.activos).find((a) => a.codigo === 'MAIL-EX01');
+    assert.equal(map.body.instalaciones[0].codigo, 'HOU');
+    const line4 = map.body.tramos.find((t) => t.codigo === 'L4-T3');
 
-    assert.equal((await ti.call(`/activos/${mail.id}/aislar`, { method: 'POST', body: { motivo: 'corto' } })).status, 400);
-    const iso = await ti.call(`/activos/${mail.id}/aislar`, { method: 'POST', body: { motivo: 'Reglas de reenvío sospechosas en buzones' } });
+    assert.equal((await ot.call(`/activos/${line4.id}/aislar`, { method: 'POST', body: { motivo: 'corto' } })).status, 400);
+    const iso = await ot.call(`/activos/${line4.id}/aislar`, { method: 'POST', body: { motivo: 'Alarma de presión en Dorsey Junction' } });
     assert.equal(iso.status, 200);
-    assert.equal((await ti.call(`/activos/${mail.id}/liberar`, { method: 'POST', body: {} })).status, 409);
+    assert.equal((await ot.call(`/activos/${line4.id}/liberar`, { method: 'POST', body: {} })).status, 409);
 
-    const round = await ti.call('/rondas', { method: 'POST', body: { alcance: 'aislados' } });
+    const round = await ot.call('/rondas', { method: 'POST', body: { alcance: 'aislados' } });
     assert.equal(round.status, 201);
-    assert.equal((await ti.call('/rondas', { method: 'POST', body: { alcance: 'rack', valor: 'Z' } })).status, 400);
-    assert.equal((await ti.call(`/rondas/${round.body.id}/activos/${mail.id}`, { method: 'PATCH', body: { resultado: 'falla' } })).status, 400);
-    assert.equal((await ti.call(`/rondas/${round.body.id}/activos/${mail.id}`, { method: 'PATCH', body: { resultado: 'ok' } })).status, 200);
-    assert.equal((await ti.call(`/rondas/${round.body.id}/cerrar`, { method: 'POST' })).status, 200);
-    const released = await ti.call(`/activos/${mail.id}/liberar`, { method: 'POST', body: { nota: 'Reglas eliminadas' } });
+    assert.equal((await ot.call('/rondas', { method: 'POST', body: { alcance: 'linea', valor: 'L9' } })).status, 400);
+    const item = `/rondas/${round.body.id}/activos/${line4.id}`;
+    assert.equal((await ot.call(item, { method: 'PATCH', body: { resultado: 'falla' } })).status, 400);
+    assert.equal((await ot.call(item, { method: 'PATCH', body: { resultado: 'ok', confirmados: [0] } })).status, 409);
+    assert.equal((await ot.call(item, { method: 'PATCH', body: OK_TRAMO })).status, 200);
+    assert.equal((await ot.call(`/rondas/${round.body.id}/cerrar`, { method: 'POST' })).status, 200);
+    const released = await ot.call(`/activos/${line4.id}/liberar`, { method: 'POST', body: { nota: 'Presión normal tras patrullaje' } });
     assert.equal(released.status, 200);
     assert.equal(released.body.aislado, false);
 
-    const ledger = await ti.call('/bitacora/verificar');
+    const ledger = await ot.call('/bitacora/verificar');
     assert.equal(ledger.body.integra, true);
-    const recent = await ti.call('/bitacora?limite=3');
+    const recent = await ot.call('/bitacora?limite=3');
     assert.equal(recent.body.length, 3);
     assert.equal(recent.body[0].evento, 'activo_liberado');
-  });
-
-  test('el mapa del oleoducto responde con instalaciones y tramos', async () => {
-    const ot = ctx.client();
-    await ot.login(EMAILS.operadorOt);
-    const res = await ot.call('/mapas/oleoducto');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.instalaciones[0].ciudad, 'Pasadena');
   });
 });

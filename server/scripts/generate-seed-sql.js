@@ -15,6 +15,7 @@ const literal = (value) => {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.length ? `ARRAY[${value.map(literal).join(', ')}]` : `'{}'::TEXT[]`;
   return `'${String(value).replaceAll("'", "''")}'`;
 };
 
@@ -39,7 +40,7 @@ const stageResourceRows = Object.entries(STAGES).flatMap(([clave, s]) =>
 
 const sql = `-- =============================================================================
 --  Centro de Contingencia — Colonial Pipeline (2021)
---  02 · Datos iniciales: catálogo del plan, recursos, usuarios, servicios, ubicaciones y activos
+--  02 · Datos iniciales: catálogo del plan, recursos, usuarios, servicios y red del oleoducto
 --  Gestor: PostgreSQL 16 · ARCHIVO GENERADO por server/scripts/generate-seed-sql.js
 --
 --  Es idempotente: puede ejecutarse varias veces sin duplicar registros.
@@ -90,33 +91,34 @@ INSERT INTO servicios (codigo, nombre, tipo, criticidad, descripcion) VALUES
 ${valuesBlock(SERVICES.map((s) => [s.codigo, s.nombre, s.tipo, s.criticidad, s.descripcion]))}
 ON CONFLICT (codigo) DO NOTHING;
 
--- Instalaciones de la red (distancias aproximadas, con fines académicos)
-INSERT INTO ubicaciones (codigo, nombre, tipo, ciudad, estado_eeuu, km_aprox, servicio_id, descripcion)
-SELECT v.codigo, v.nombre, v.tipo::tipo_ubicacion, v.ciudad, v.estado, v.km::SMALLINT, s.id, v.descripcion
+-- Instalaciones y mercados de la red (mapa oficial de Colonial; ver fuentes de cada fila)
+INSERT INTO ubicaciones (codigo, nombre, tipo, ciudad, estado_eeuu, latitud, longitud, servicio_id, descripcion, fuentes)
+SELECT v.codigo, v.nombre, v.tipo::tipo_ubicacion, v.ciudad, v.estado, v.latitud, v.longitud, s.id, v.descripcion, v.fuentes
   FROM (VALUES
-${valuesBlock(LOCATIONS.map((l) => [l.codigo, l.nombre, l.tipo, l.ciudad, l.estado, l.km, l.servicio, l.descripcion]))}
-  ) AS v (codigo, nombre, tipo, ciudad, estado, km, servicio, descripcion)
-  LEFT JOIN servicios s ON s.codigo = v.servicio
+${valuesBlock(LOCATIONS.map((l) => [l.codigo, l.nombre, l.tipo, l.ciudad, l.estado, l.latitud, l.longitud, l.servicio, l.descripcion, l.fuentes]))}
+  ) AS v (codigo, nombre, tipo, ciudad, estado, latitud, longitud, servicio, descripcion, fuentes)
+  JOIN servicios s ON s.codigo = v.servicio
 ON CONFLICT (codigo) DO UPDATE SET
   nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, ciudad = EXCLUDED.ciudad, estado_eeuu = EXCLUDED.estado_eeuu,
-  km_aprox = EXCLUDED.km_aprox, servicio_id = EXCLUDED.servicio_id, descripcion = EXCLUDED.descripcion;
+  latitud = EXCLUDED.latitud, longitud = EXCLUDED.longitud, servicio_id = EXCLUDED.servicio_id,
+  descripcion = EXCLUDED.descripcion, fuentes = EXCLUDED.fuentes;
 
--- Activos por rack (plataformas de referencia). El estado de aislamiento no se toca al resincronizar.
-INSERT INTO activos (codigo, nombre, plataforma, funcion, red, servicio_id, ubicacion_id, rack, u_inicio, u_alto, criticidad,
-                     expuesto_internet, sin_mfa, sin_soporte, privilegiado)
-SELECT v.codigo, v.nombre, v.plataforma, v.funcion, v.red::tipo_servicio, s.id, u.id, v.rack, v.u::SMALLINT, v.alto::SMALLINT,
-       v.criticidad::SMALLINT, v.expuesto, v.sin_mfa, v.sin_soporte, v.privilegiado
+-- Tramos y sistemas del caso. El estado de aislamiento no se toca al resincronizar.
+INSERT INTO activos (codigo, nombre, tipo, red, servicio_id, linea, desde_id, hasta_id, paradas, diametro_pulg, capacidad_bpd,
+                     producto, descripcion, hallazgo, fuentes)
+SELECT v.codigo, v.nombre, v.tipo::tipo_activo, v.red::tipo_servicio, s.id, v.linea, d.id, h.id, v.paradas::CHAR(3)[],
+       v.diametro::SMALLINT, v.capacidad::INTEGER, v.producto, v.descripcion, v.hallazgo, v.fuentes
   FROM (VALUES
-${valuesBlock(ASSETS.map((a) => [a.codigo, a.nombre, a.plataforma, a.funcion, a.red, a.servicio, a.ubicacion, a.rack, a.u, a.alto, a.criticidad, a.expuesto, a.sinMfa, a.sinSoporte, a.privilegiado]))}
-  ) AS v (codigo, nombre, plataforma, funcion, red, servicio, ubicacion, rack, u, alto, criticidad, expuesto, sin_mfa, sin_soporte, privilegiado)
-  JOIN ubicaciones u ON u.codigo = v.ubicacion
-  LEFT JOIN servicios s ON s.codigo = v.servicio
+${valuesBlock(ASSETS.map((a) => [a.codigo, a.nombre, a.tipo, a.red, a.servicio, a.linea, a.desde, a.hasta, a.paradas, a.diametro, a.capacidad, a.producto, a.descripcion, a.hallazgo, a.fuentes]))}
+  ) AS v (codigo, nombre, tipo, red, servicio, linea, desde, hasta, paradas, diametro, capacidad, producto, descripcion, hallazgo, fuentes)
+  JOIN servicios s ON s.codigo = v.servicio
+  LEFT JOIN ubicaciones d ON d.codigo = v.desde
+  LEFT JOIN ubicaciones h ON h.codigo = v.hasta
 ON CONFLICT (codigo) DO UPDATE SET
-  nombre = EXCLUDED.nombre, plataforma = EXCLUDED.plataforma, funcion = EXCLUDED.funcion, red = EXCLUDED.red,
-  servicio_id = EXCLUDED.servicio_id, ubicacion_id = EXCLUDED.ubicacion_id, rack = EXCLUDED.rack,
-  u_inicio = EXCLUDED.u_inicio, u_alto = EXCLUDED.u_alto, criticidad = EXCLUDED.criticidad,
-  expuesto_internet = EXCLUDED.expuesto_internet, sin_mfa = EXCLUDED.sin_mfa,
-  sin_soporte = EXCLUDED.sin_soporte, privilegiado = EXCLUDED.privilegiado;
+  nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, red = EXCLUDED.red, servicio_id = EXCLUDED.servicio_id,
+  linea = EXCLUDED.linea, desde_id = EXCLUDED.desde_id, hasta_id = EXCLUDED.hasta_id, paradas = EXCLUDED.paradas,
+  diametro_pulg = EXCLUDED.diametro_pulg, capacidad_bpd = EXCLUDED.capacidad_bpd, producto = EXCLUDED.producto,
+  descripcion = EXCLUDED.descripcion, hallazgo = EXCLUDED.hallazgo, fuentes = EXCLUDED.fuentes;
 
 COMMIT;
 `;

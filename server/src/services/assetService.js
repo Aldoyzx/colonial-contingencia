@@ -1,27 +1,38 @@
-import { RACKS, RACK_UNITS } from '../db/seedData.js';
 import { BusinessRuleError, NotFoundError } from '../domain/errors.js';
 import { assertCanOperateAsset } from '../domain/permissions.js';
-import { ISOLATION_THRESHOLD, assessRisk } from '../domain/risk.js';
+import {
+  CASE_STATES, CASE_TIMELINE, REFERENCE_CAPACITY_BPD, caseStateOf, checklistFor, elementState, impactLevel, stoppedCapacity,
+} from '../domain/pipeline.js';
+import { SOURCES } from '../domain/sources.js';
 import { recordHistory } from './historyService.js';
 
 const ASSET_SELECT = `
   SELECT a.*, s.codigo AS servicio_codigo, s.nombre AS servicio_nombre, s.estado AS servicio_estado,
-         ub.codigo AS ubicacion_codigo, ub.nombre AS ubicacion_nombre, ub.ciudad AS ubicacion_ciudad,
+         d.codigo AS desde_codigo, d.nombre AS desde_nombre, h.codigo AS hasta_codigo, h.nombre AS hasta_nombre,
          ua.nombre AS aislado_por_nombre,
          v.resultado AS verificacion_resultado, v.verificado_en, v.nota AS verificacion_nota, v.verificado_por AS verificado_por_nombre
     FROM activos a
-    JOIN ubicaciones ub ON ub.id = a.ubicacion_id
-    LEFT JOIN servicios s ON s.id = a.servicio_id
+    JOIN servicios s ON s.id = a.servicio_id
+    LEFT JOIN ubicaciones d ON d.id = a.desde_id
+    LEFT JOIN ubicaciones h ON h.id = a.hasta_id
     LEFT JOIN usuarios ua ON ua.id = a.aislado_por
     LEFT JOIN v_ultima_verificacion v ON v.activo_id = a.id`;
 
-/** Activo con su riesgo y si ya puede liberarse (verificación OK posterior al aislamiento). */
+const ORDER = `ORDER BY a.tipo, CASE WHEN a.linea = 'LAT' THEN 1 ELSE 0 END, a.linea, a.codigo`;
+
+/** Elemento con su estado, su calor y si ya puede reconectarse (OK posterior al aislamiento). */
 function decorate(asset) {
-  const riesgo = assessRisk(asset, asset.servicio_estado ?? null);
-  const verificadoTrasAislar = Boolean(
+  const puedeLiberarse = Boolean(
     asset.aislado && asset.verificacion_resultado === 'ok' && new Date(asset.verificado_en) > new Date(asset.aislado_en)
   );
-  return { ...asset, riesgo, puedeLiberarse: verificadoTrasAislar };
+  return {
+    ...asset,
+    estado: elementState(asset),
+    nivelCalor: impactLevel(asset),
+    bpdDetenidos: stoppedCapacity(asset),
+    checklist: checklistFor(asset),
+    puedeLiberarse,
+  };
 }
 
 async function getAssetRow(db, assetId, { forUpdate = false } = {}) {
@@ -29,7 +40,7 @@ async function getAssetRow(db, assetId, { forUpdate = false } = {}) {
     forUpdate ? 'SELECT * FROM activos WHERE id = $1 FOR UPDATE' : `${ASSET_SELECT} WHERE a.id = $1`,
     [assetId]
   );
-  if (!asset) throw new NotFoundError('Activo', assetId);
+  if (!asset) throw new NotFoundError('Elemento de la red', assetId);
   return asset;
 }
 
@@ -45,48 +56,42 @@ export async function getAsset(db, assetId) {
 }
 
 export async function listAssets(db) {
-  return (await db.many(`${ASSET_SELECT} ORDER BY a.rack, a.u_inicio DESC`)).map(decorate);
+  return (await db.many(`${ASSET_SELECT} ${ORDER}`)).map(decorate);
 }
 
 // ------------------------------------------------------------------ aislamiento
 
-async function isolate(db, asset, { motivo, usuarioId, incidenteId = null, evento }) {
+async function isolate(db, asset, { motivo, usuarioId, incidenteId = null }) {
   await db.run(
     `UPDATE activos SET aislado = TRUE, aislado_motivo = $2, aislado_por = $3, aislado_en = clock_timestamp(), actualizado_en = now()
       WHERE id = $1`,
     [asset.id, motivo, usuarioId]
   );
   await recordHistory(db, {
-    incidenteId, activoId: asset.id, evento, estadoAnterior: 'conectado', estadoNuevo: 'aislado', detalle: `${asset.codigo}: ${motivo}`, usuarioId,
+    incidenteId, activoId: asset.id, evento: 'activo_aislado', estadoAnterior: 'conectado', estadoNuevo: 'aislado',
+    detalle: `${asset.codigo}: ${motivo}`, usuarioId,
   });
 }
 
 /**
- * Regla traída del proyecto Rack (las posiciones con daño rojo se bloquean solas): cuando un
- * servicio pasa a "afectado", sus activos que quedan en rojo se aíslan automáticamente.
- * Los demás quedan en el mapa para que el equipo decida.
- * @returns {Promise<string[]>} códigos de los activos aislados.
+ * Regla adaptada de Rack (lo que queda en rojo se bloquea solo) y de lo que hizo Colonial:
+ * cuando un servicio pasa a "afectado", todos sus tramos y sistemas se aíslan, igual que el
+ * 7 de mayo se detuvo la red entera para contener el ataque (testimonio de Blount).
+ * @returns {Promise<string[]>} códigos de los elementos aislados.
  */
-export async function isolateRedAssetsOfService(db, service, { usuarioId, incidenteId = null }) {
+export async function isolateElementsOfService(db, service, { usuarioId, incidenteId = null }) {
   const assets = await db.many('SELECT * FROM activos WHERE servicio_id = $1 AND NOT aislado ORDER BY id FOR UPDATE', [service.id]);
-  const isolated = [];
   for (const asset of assets) {
-    const { puntaje } = assessRisk(asset, 'afectado');
-    if (puntaje < ISOLATION_THRESHOLD) continue;
-    await isolate(db, asset, {
-      motivo: `Aislamiento automático: riesgo ${Math.round(puntaje * 100)}% al quedar afectado ${service.codigo}`,
-      usuarioId,
-      incidenteId,
-      evento: 'activo_aislado',
-    });
-    isolated.push(asset.codigo);
+    const motivo = asset.tipo === 'tramo'
+      ? `Aislamiento automático: bombeo detenido y válvulas cerradas al quedar afectado ${service.codigo}`
+      : `Aislamiento automático: desconectado de la red al quedar afectado ${service.codigo}`;
+    await isolate(db, asset, { motivo, usuarioId, incidenteId });
   }
-  return isolated;
+  return assets.map((a) => a.codigo);
 }
 
-/** Incidente abierto más reciente del servicio del activo, para enlazar la bitácora. */
+/** Incidente abierto más reciente del servicio del elemento, para enlazar la bitácora. */
 async function openIncidentFor(db, asset) {
-  if (!asset.servicio_id) return null;
   const row = await db.one(
     `SELECT i.id FROM incidentes i JOIN incidente_servicios isv ON isv.incidente_id = i.id
       WHERE isv.servicio_id = $1 AND i.estado = 'abierto' ORDER BY i.id DESC LIMIT 1`,
@@ -100,7 +105,7 @@ export function isolateAsset(db, assetId, { motivo }, user) {
     const asset = await getAssetRow(tx, assetId, { forUpdate: true });
     assertCanOperateAsset(user, asset);
     if (asset.aislado) throw new BusinessRuleError(`${asset.codigo} ya está aislado`);
-    await isolate(tx, asset, { motivo, usuarioId: user.id, incidenteId: await openIncidentFor(tx, asset), evento: 'activo_aislado' });
+    await isolate(tx, asset, { motivo, usuarioId: user.id, incidenteId: await openIncidentFor(tx, asset) });
     return getAsset(tx, assetId);
   });
 }
@@ -139,57 +144,55 @@ export function releaseAsset(db, assetId, { nota }, user) {
   });
 }
 
-// ------------------------------------------------------------------ mapas de calor
+// ------------------------------------------------------------------ mapa de calor
 
 function summarize(assets) {
-  const porNivel = [0, 0, 0, 0, 0, 0];
-  assets.forEach((a) => { porNivel[a.riesgo.nivel] += 1; });
+  const tramos = assets.filter((a) => a.tipo === 'tramo');
+  const principales = tramos.filter((t) => t.linea !== 'LAT');
+  const lineasDetenidas = new Set(principales.filter((t) => ['aislado', 'afectado'].includes(t.estado)).map((t) => t.linea));
   return {
-    total: assets.length,
+    tramos: tramos.length,
+    sistemas: assets.length - tramos.length,
     aislados: assets.filter((a) => a.aislado).length,
-    enRojo: porNivel[5],
+    lineasDetenidas: lineasDetenidas.size,
+    lineasPrincipales: new Set(principales.map((t) => t.linea)).size,
     listosParaReconectar: assets.filter((a) => a.puedeLiberarse).length,
-    sinVerificar: assets.filter((a) => !a.verificacion_resultado).length,
-    porNivel,
+    sinVerificar: assets.filter((a) => a.aislado && !a.puedeLiberarse).length,
   };
 }
 
-/** Mapa de calor del centro de datos y del centro de control: racks de 42 U con sus activos. */
-export async function getDataCenterMap(db) {
-  const assets = await listAssets(db);
-  const locations = await db.many(`SELECT codigo, nombre, ciudad, estado_eeuu FROM ubicaciones WHERE tipo IN ('centro_datos', 'centro_control')`);
-  const racks = RACKS.map((rack) => ({
-    ...rack,
-    unidades: RACK_UNITS,
-    ubicacion: locations.find((l) => l.codigo === rack.ubicacion) ?? null,
-    activos: assets.filter((a) => a.rack === rack.codigo),
-  }));
-  return { generadoEn: new Date().toISOString(), umbralAislamiento: ISOLATION_THRESHOLD, racks, resumen: summarize(assets) };
-}
-
-/** Mapa de la red del oleoducto: instalaciones ordenadas por distancia y tramos coloreados por estado. */
+/**
+ * Mapa de calor de la red: instalaciones con coordenadas, tramos con su estado e impacto,
+ * sistemas del caso, la reproducción día a día del caso real y las fuentes de todo.
+ */
 export async function getPipelineMap(db) {
   const [locations, assets] = await Promise.all([
     db.many(
-      `SELECT u.*, s.codigo AS servicio_codigo, s.nombre AS servicio_nombre, s.estado AS servicio_estado,
-              s.nota_estado AS servicio_nota, s.criticidad AS servicio_criticidad
-         FROM ubicaciones u LEFT JOIN servicios s ON s.id = u.servicio_id
-        ORDER BY u.km_aprox NULLS LAST, u.codigo`
+      `SELECT u.codigo, u.nombre, u.tipo, u.ciudad, u.estado_eeuu, u.latitud::FLOAT AS latitud, u.longitud::FLOAT AS longitud,
+              u.descripcion, u.fuentes, s.codigo AS servicio_codigo, s.estado AS servicio_estado
+         FROM ubicaciones u JOIN servicios s ON s.id = u.servicio_id
+        ORDER BY u.longitud`
     ),
     listAssets(db),
   ]);
-  const line = locations.filter((l) => l.km_aprox !== null);
-  const tramos = line.slice(1).map((destino, i) => ({
-    desde: line[i].codigo,
-    hasta: destino.codigo,
-    servicio_codigo: destino.servicio_codigo,
-    servicio_estado: destino.servicio_estado,
-  }));
-  const centros = locations
-    .filter((l) => l.km_aprox === null)
-    .map((c) => {
-      const own = assets.filter((a) => a.ubicacion_codigo === c.codigo);
-      return { ...c, activos: own.length, aislados: own.filter((a) => a.aislado).length, enRojo: own.filter((a) => a.riesgo.nivel === 5).length };
-    });
-  return { generadoEn: new Date().toISOString(), instalaciones: line, tramos, centros, longitudKm: line.at(-1)?.km_aprox ?? 0 };
+  const tramos = assets.filter((a) => a.tipo === 'tramo');
+  return {
+    generadoEn: new Date().toISOString(),
+    capacidadReferencia: REFERENCE_CAPACITY_BPD,
+    instalaciones: locations,
+    tramos,
+    sistemas: assets.filter((a) => a.tipo === 'sistema'),
+    resumen: summarize(assets),
+    caso: {
+      estados: CASE_STATES,
+      dias: CASE_TIMELINE.map((day) => ({
+        fecha: day.fecha,
+        titulo: day.titulo,
+        detalle: day.detalle,
+        fuentes: day.fuentes,
+        tramos: Object.fromEntries(tramos.map((t) => [t.codigo, caseStateOf(day, t)])),
+      })),
+    },
+    fuentes: SOURCES,
+  };
 }

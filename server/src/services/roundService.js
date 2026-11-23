@@ -1,15 +1,14 @@
 import { BusinessRuleError, NotFoundError } from '../domain/errors.js';
 import { ROLES, assertCanOperateAsset, assertCanStartRound } from '../domain/permissions.js';
+import { checklistFor } from '../domain/pipeline.js';
 import { recordHistory } from './historyService.js';
 
 /**
- * Rondas de verificación: equivalente a la revisión diaria de ubicaciones del proyecto Rack.
- * Antes de reconectar un activo aislado, alguien de su red lo revisa con una lista fija.
+ * Rondas de verificación: adaptación de la revisión diaria de ubicaciones del proyecto Rack.
+ * Antes de reiniciar un tramo o reconectar un sistema aislado, alguien de su red confirma
+ * cada punto de una lista con fuente (domain/pipeline.js). Un OK exige confirmarlos todos.
  */
-export const CHECKLIST = Object.freeze({
-  TI: ['EDR sin detecciones activas', 'Credenciales y llaves rotadas', 'Parches críticos aplicados', 'Respaldo limpio verificado'],
-  OT: ['Lógica de control íntegra (sin cambios no autorizados)', 'Comunicación con las RTU estable', 'Alarmas y presiones normales', 'Accesos remotos cerrados'],
-});
+const ITEM_ORDER = `ORDER BY a.tipo, CASE WHEN a.linea = 'LAT' THEN 1 ELSE 0 END, a.linea, a.codigo`;
 
 const ROUND_SELECT = `
   SELECT r.*, ui.nombre AS iniciada_por_nombre, uc.nombre AS cerrada_por_nombre, i.codigo AS incidente_codigo,
@@ -33,36 +32,36 @@ export async function getRound(db, roundId) {
   if (!round) throw new NotFoundError('Ronda', roundId);
   const items = await db.many(
     `SELECT ri.*, u.nombre AS verificado_por_nombre,
-            a.codigo, a.nombre, a.plataforma, a.red, a.rack, a.u_inicio, a.u_alto, a.aislado, a.aislado_en,
+            a.codigo, a.nombre, a.tipo, a.red, a.linea, a.aislado, a.aislado_en,
             s.codigo AS servicio_codigo
        FROM ronda_items ri
        JOIN activos a ON a.id = ri.activo_id
        LEFT JOIN servicios s ON s.id = a.servicio_id
        LEFT JOIN usuarios u ON u.id = ri.verificado_por
       WHERE ri.ronda_id = $1
-      ORDER BY a.rack, a.u_inicio DESC`,
+      ${ITEM_ORDER}`,
     [roundId]
   );
-  return { ...round, items, checklist: CHECKLIST };
+  return { ...round, items: items.map((item) => ({ ...item, checklist: checklistFor(item) })) };
 }
 
 async function resolveScope(db, alcance, valor) {
-  if (alcance === 'aislados') return db.many('SELECT id, codigo FROM activos WHERE aislado ORDER BY rack, u_inicio DESC');
-  if (alcance === 'rack') return db.many('SELECT id, codigo FROM activos WHERE rack = $1 ORDER BY u_inicio DESC', [valor]);
+  if (alcance === 'aislados') return db.many(`SELECT a.id, a.codigo FROM activos a WHERE a.aislado ${ITEM_ORDER}`);
+  if (alcance === 'linea') return db.many(`SELECT a.id, a.codigo FROM activos a WHERE a.linea = $1 ${ITEM_ORDER}`, [valor]);
   return db.many(
-    `SELECT a.id, a.codigo FROM activos a JOIN servicios s ON s.id = a.servicio_id WHERE s.codigo = $1 ORDER BY a.rack, a.u_inicio DESC`,
+    `SELECT a.id, a.codigo FROM activos a JOIN servicios s ON s.id = a.servicio_id WHERE s.codigo = $1 ${ITEM_ORDER}`,
     [valor]
   );
 }
 
-const SCOPE_LABEL = { aislados: 'activos aislados', rack: 'rack', servicio: 'servicio' };
+const SCOPE_LABEL = { aislados: 'elementos aislados', linea: 'línea', servicio: 'servicio' };
 
 export function startRound(db, { alcance, valor, incidenteId }, user) {
   return db.tx(async (tx) => {
     assertCanStartRound(user);
     const assets = await resolveScope(tx, alcance, valor);
     if (assets.length === 0) {
-      throw new BusinessRuleError(alcance === 'aislados' ? 'No hay activos aislados que verificar' : `No hay activos en ${SCOPE_LABEL[alcance]} ${valor}`);
+      throw new BusinessRuleError(alcance === 'aislados' ? 'No hay elementos aislados que verificar' : `No hay elementos en ${SCOPE_LABEL[alcance]} ${valor}`);
     }
     if (incidenteId) {
       const incident = await tx.one('SELECT id FROM incidentes WHERE id = $1', [incidenteId]);
@@ -80,7 +79,7 @@ export function startRound(db, { alcance, valor, incidenteId }, user) {
       incidenteId: incidenteId ?? null,
       evento: 'ronda_iniciada',
       estadoNuevo: 'abierta',
-      detalle: `Ronda #${id} · ${SCOPE_LABEL[alcance]}${valor ? ` ${valor}` : ''} · ${assets.length} activo(s)`,
+      detalle: `Ronda #${id} · ${SCOPE_LABEL[alcance]}${valor ? ` ${valor}` : ''} · ${assets.length} elemento(s)`,
       usuarioId: user.id,
     });
     return getRound(tx, id);
@@ -94,25 +93,34 @@ async function getOpenRound(db, roundId) {
   return round;
 }
 
-export function recordCheck(db, roundId, assetId, { resultado, nota }, user) {
+export function recordCheck(db, roundId, assetId, { resultado, nota, confirmados = [] }, user) {
   return db.tx(async (tx) => {
     const round = await getOpenRound(tx, roundId);
     const item = await tx.one(
-      `SELECT ri.*, a.codigo, a.red FROM ronda_items ri JOIN activos a ON a.id = ri.activo_id
+      `SELECT ri.*, a.codigo, a.red, a.tipo FROM ronda_items ri JOIN activos a ON a.id = ri.activo_id
         WHERE ri.ronda_id = $1 AND ri.activo_id = $2 FOR UPDATE OF ri`,
       [roundId, assetId]
     );
-    if (!item) throw new NotFoundError('Activo en la ronda', assetId);
+    if (!item) throw new NotFoundError('Elemento en la ronda', assetId);
     assertCanOperateAsset(user, item);
     if (resultado !== 'ok' && !nota) {
       throw new BusinessRuleError('Explica lo observado o la falla en la nota');
     }
+    const checklist = checklistFor(item);
+    const confirmed = [...new Set(confirmados)].sort((a, b) => a - b);
+    if (confirmed.some((i) => i >= checklist.length)) {
+      throw new BusinessRuleError(`La lista de ${item.codigo} tiene ${checklist.length} puntos`);
+    }
+    if (resultado === 'ok' && confirmed.length !== checklist.length) {
+      const missing = checklist.filter((_, i) => !confirmed.includes(i)).map((c) => c.texto);
+      throw new BusinessRuleError(`Para marcar OK confirma todos los puntos. Falta: ${missing.join('; ')}`);
+    }
 
     // clock_timestamp: la verificación debe quedar después del aislamiento aunque ocurra en la misma transacción.
     await tx.run(
-      `UPDATE ronda_items SET resultado = $3, nota = $4, verificado_por = $5, verificado_en = clock_timestamp()
+      `UPDATE ronda_items SET resultado = $3, nota = $4, confirmados = $6::SMALLINT[], verificado_por = $5, verificado_en = clock_timestamp()
         WHERE ronda_id = $1 AND activo_id = $2`,
-      [roundId, assetId, resultado, nota ?? null, user.id]
+      [roundId, assetId, resultado, nota ?? null, user.id, confirmed]
     );
     await recordHistory(tx, {
       incidenteId: round.incidente_id,
@@ -120,7 +128,7 @@ export function recordCheck(db, roundId, assetId, { resultado, nota }, user) {
       evento: 'verificacion_activo',
       estadoAnterior: item.resultado,
       estadoNuevo: resultado,
-      detalle: `Ronda #${roundId} · ${item.codigo}${nota ? `: ${nota}` : ''}`,
+      detalle: `Ronda #${roundId} · ${item.codigo} · ${confirmed.length}/${checklist.length} puntos confirmados${nota ? `: ${nota}` : ''}`,
       usuarioId: user.id,
     });
     return getRound(tx, roundId);
@@ -142,7 +150,7 @@ export function closeRound(db, roundId, user) {
       [roundId]
     );
     if (counts.pendientes > 0) {
-      throw new BusinessRuleError(`Faltan ${counts.pendientes} activo(s) por verificar antes de cerrar la ronda`);
+      throw new BusinessRuleError(`Faltan ${counts.pendientes} elemento(s) por verificar antes de cerrar la ronda`);
     }
     await tx.run('UPDATE rondas SET cerrada_por = $2, cerrada_en = clock_timestamp() WHERE id = $1', [roundId, user.id]);
     await recordHistory(tx, {

@@ -1,7 +1,8 @@
 -- =============================================================================
 --  Centro de Contingencia — Colonial Pipeline (2021)
---  07 · Mapas de calor, aislamiento de activos, rondas de verificación y
---       bitácora encadenada con SHA-256 (funciones traídas del proyecto Rack · Operación)
+--  07 · Mapa de calor de la red del oleoducto, aislamiento de tramos y sistemas,
+--       rondas de verificación y bitácora encadenada con SHA-256
+--       (funciones adaptadas del proyecto Rack · Operación; datos con fuente pública)
 --  Gestor: PostgreSQL 16
 --
 --  Es idempotente: el servidor lo aplica en cada arranque, tanto en bases nuevas
@@ -14,18 +15,26 @@ BEGIN;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tipo_ubicacion') THEN
-    CREATE TYPE tipo_ubicacion AS ENUM ('centro_control', 'centro_datos', 'estacion_bombeo', 'patio_tanques', 'terminal');
+    CREATE TYPE tipo_ubicacion AS ENUM ('origen', 'punto_entrega', 'patio_tanques', 'estacion', 'derivacion', 'terminal');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tipo_activo') THEN
+    CREATE TYPE tipo_activo AS ENUM ('tramo', 'sistema');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'resultado_verificacion') THEN
     CREATE TYPE resultado_verificacion AS ENUM ('ok', 'observado', 'falla');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'alcance_ronda') THEN
-    CREATE TYPE alcance_ronda AS ENUM ('aislados', 'rack', 'servicio');
+    CREATE TYPE alcance_ronda AS ENUM ('aislados', 'linea', 'servicio');
   END IF;
 END $$;
 
+-- Claves de server/src/domain/sources.js: cada fila dice qué fuente pública la sustenta.
+CREATE OR REPLACE FUNCTION fn_fuentes_validas(p_fuentes TEXT[]) RETURNS BOOLEAN LANGUAGE sql IMMUTABLE AS $$
+  SELECT cardinality(p_fuentes) >= 1 AND NOT EXISTS (SELECT 1 FROM unnest(p_fuentes) f WHERE f !~ '^[a-z0-9]{3,20}$')
+$$;
+
 -- -----------------------------------------------------------------------------
--- Ubicaciones físicas de la red (mapa del oleoducto)
+-- Instalaciones de la red (mapa oficial de Colonial, 13 may 2021)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ubicaciones (
   id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -34,54 +43,62 @@ CREATE TABLE IF NOT EXISTS ubicaciones (
   tipo         tipo_ubicacion NOT NULL,
   ciudad       VARCHAR(60)    NOT NULL,
   estado_eeuu  CHAR(2)        NOT NULL,
-  km_aprox     SMALLINT,
-  servicio_id  INTEGER        REFERENCES servicios (id) ON DELETE RESTRICT,
+  latitud      NUMERIC(7, 4)  NOT NULL,
+  longitud     NUMERIC(7, 4)  NOT NULL,
+  servicio_id  INTEGER        NOT NULL REFERENCES servicios (id) ON DELETE RESTRICT,
   descripcion  VARCHAR(300)   NOT NULL,
-  CONSTRAINT ck_ubicaciones_codigo CHECK (codigo ~ '^[A-Z]{3}$'),
-  CONSTRAINT ck_ubicaciones_estado CHECK (estado_eeuu ~ '^[A-Z]{2}$'),
-  CONSTRAINT ck_ubicaciones_km     CHECK (km_aprox IS NULL OR km_aprox BETWEEN 0 AND 3000),
-  -- Las instalaciones de la línea tienen posición y tramo; los centros (control, datos) no.
-  CONSTRAINT ck_ubicaciones_linea  CHECK ((tipo IN ('centro_control', 'centro_datos')) = (km_aprox IS NULL))
+  fuentes      TEXT[]         NOT NULL,
+  CONSTRAINT ck_ubicaciones_codigo  CHECK (codigo ~ '^[A-Z]{3}$'),
+  CONSTRAINT ck_ubicaciones_estado  CHECK (estado_eeuu ~ '^[A-Z]{2}$'),
+  -- Territorio continental de EE. UU.
+  CONSTRAINT ck_ubicaciones_coords  CHECK (latitud BETWEEN 24 AND 50 AND longitud BETWEEN -125 AND -66),
+  CONSTRAINT ck_ubicaciones_fuentes CHECK (fn_fuentes_validas(fuentes))
 );
-COMMENT ON TABLE ubicaciones IS 'Instalaciones del oleoducto y centros de control/datos. Posiciones aproximadas, con fines académicos';
+COMMENT ON TABLE ubicaciones IS 'Instalaciones y mercados del mapa oficial de Colonial; coordenadas del centro de cada ciudad';
 
 -- -----------------------------------------------------------------------------
--- Activos tecnológicos en racks (mapa de calor del centro de datos)
+-- Elementos de la red: tramos de tubería y sistemas documentados en el caso
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS activos (
-  id                 INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  codigo             VARCHAR(16)   NOT NULL UNIQUE,
-  nombre             VARCHAR(100)  NOT NULL,
-  plataforma         VARCHAR(120)  NOT NULL,
-  funcion            VARCHAR(300)  NOT NULL,
-  red                tipo_servicio NOT NULL,
-  servicio_id        INTEGER       REFERENCES servicios (id) ON DELETE RESTRICT,
-  ubicacion_id       INTEGER       NOT NULL REFERENCES ubicaciones (id) ON DELETE RESTRICT,
-  rack               VARCHAR(4)    NOT NULL,
-  u_inicio           SMALLINT      NOT NULL,
-  u_alto             SMALLINT      NOT NULL,
-  criticidad         SMALLINT      NOT NULL,
-  expuesto_internet  BOOLEAN       NOT NULL DEFAULT FALSE,
-  sin_mfa            BOOLEAN       NOT NULL DEFAULT FALSE,
-  sin_soporte        BOOLEAN       NOT NULL DEFAULT FALSE,
-  privilegiado       BOOLEAN       NOT NULL DEFAULT FALSE,
-  aislado            BOOLEAN       NOT NULL DEFAULT FALSE,
-  aislado_motivo     VARCHAR(300),
-  aislado_por        INTEGER       REFERENCES usuarios (id),
-  aislado_en         TIMESTAMPTZ,
-  actualizado_en     TIMESTAMPTZ   NOT NULL DEFAULT now(),
-  CONSTRAINT ck_activos_codigo     CHECK (codigo ~ '^[A-Z]{2,4}-[A-Z0-9]{2,10}$'),
-  CONSTRAINT ck_activos_rack       CHECK (rack ~ '^[A-Z][0-9]{2}$'),
-  CONSTRAINT ck_activos_u          CHECK (u_inicio BETWEEN 1 AND 42 AND u_alto BETWEEN 1 AND 10 AND u_inicio + u_alto - 1 <= 42),
-  CONSTRAINT ck_activos_criticidad CHECK (criticidad BETWEEN 1 AND 5),
-  CONSTRAINT ck_activos_aislado    CHECK (aislado = (aislado_motivo IS NOT NULL AND aislado_por IS NOT NULL AND aislado_en IS NOT NULL))
+  id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  codigo          VARCHAR(16)   NOT NULL UNIQUE,
+  nombre          VARCHAR(100)  NOT NULL,
+  tipo            tipo_activo   NOT NULL,
+  red             tipo_servicio NOT NULL,
+  servicio_id     INTEGER       NOT NULL REFERENCES servicios (id) ON DELETE RESTRICT,
+  linea           VARCHAR(3),
+  desde_id        INTEGER       REFERENCES ubicaciones (id) ON DELETE RESTRICT,
+  hasta_id        INTEGER       REFERENCES ubicaciones (id) ON DELETE RESTRICT,
+  paradas         CHAR(3)[]     NOT NULL DEFAULT '{}',
+  diametro_pulg   SMALLINT,
+  capacidad_bpd   INTEGER,
+  producto        VARCHAR(120),
+  descripcion     VARCHAR(300)  NOT NULL,
+  hallazgo        VARCHAR(300),
+  fuentes         TEXT[]        NOT NULL,
+  aislado         BOOLEAN       NOT NULL DEFAULT FALSE,
+  aislado_motivo  VARCHAR(300),
+  aislado_por     INTEGER       REFERENCES usuarios (id),
+  aislado_en      TIMESTAMPTZ,
+  actualizado_en  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  CONSTRAINT ck_activos_codigo    CHECK (codigo ~ '^[A-Z0-9]{2,5}-[A-Z0-9]{2,10}$'),
+  -- Un tramo une dos instalaciones y pertenece a una línea; un sistema no tiene recorrido.
+  CONSTRAINT ck_activos_tramo     CHECK (
+    (tipo = 'tramo'   AND red = 'OT' AND linea ~ '^(L[1-4]|LAT)$' AND desde_id IS NOT NULL AND hasta_id IS NOT NULL AND desde_id <> hasta_id AND hallazgo IS NULL)
+ OR (tipo = 'sistema' AND linea IS NULL AND desde_id IS NULL AND hasta_id IS NULL AND cardinality(paradas) = 0
+                      AND diametro_pulg IS NULL AND capacidad_bpd IS NULL AND hallazgo IS NOT NULL)
+  ),
+  CONSTRAINT ck_activos_medidas   CHECK ((diametro_pulg IS NULL OR diametro_pulg BETWEEN 4 AND 60) AND (capacidad_bpd IS NULL OR capacidad_bpd > 0)),
+  CONSTRAINT ck_activos_fuentes   CHECK (fn_fuentes_validas(fuentes)),
+  CONSTRAINT ck_activos_aislado   CHECK (aislado = (aislado_motivo IS NOT NULL AND aislado_por IS NOT NULL AND aislado_en IS NOT NULL))
 );
-COMMENT ON TABLE activos IS 'Servidores y equipos por rack y unidad (U). Plataformas de referencia típicas del sector, no el inventario real de Colonial';
+COMMENT ON TABLE activos IS 'Tramos del oleoducto (datos publicados) y sistemas documentados en el caso; se aíslan, verifican y reconectan';
+COMMENT ON COLUMN activos.capacidad_bpd IS 'Capacidad nominal publicada en barriles por día; NULL si no es pública';
 CREATE INDEX IF NOT EXISTS idx_activos_servicio ON activos (servicio_id);
-CREATE INDEX IF NOT EXISTS idx_activos_rack     ON activos (rack, u_inicio);
+CREATE INDEX IF NOT EXISTS idx_activos_linea    ON activos (linea);
 
 -- -----------------------------------------------------------------------------
--- Rondas de verificación (como la revisión diaria de ubicaciones del rack)
+-- Rondas de verificación antes de reconectar (revisión de ubicaciones de Rack)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS rondas (
   id             INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -100,6 +117,7 @@ CREATE TABLE IF NOT EXISTS ronda_items (
   ronda_id        INTEGER                NOT NULL REFERENCES rondas (id) ON DELETE CASCADE,
   activo_id       INTEGER                NOT NULL REFERENCES activos (id) ON DELETE RESTRICT,
   resultado       resultado_verificacion,
+  confirmados     SMALLINT[]             NOT NULL DEFAULT '{}',
   nota            VARCHAR(500),
   verificado_por  INTEGER                REFERENCES usuarios (id),
   verificado_en   TIMESTAMPTZ,
@@ -107,6 +125,7 @@ CREATE TABLE IF NOT EXISTS ronda_items (
   CONSTRAINT ck_ronda_items_registro CHECK ((resultado IS NULL) = (verificado_por IS NULL) AND (resultado IS NULL) = (verificado_en IS NULL)),
   CONSTRAINT ck_ronda_items_nota     CHECK (resultado IS NULL OR resultado = 'ok' OR char_length(btrim(nota)) >= 5)
 );
+COMMENT ON COLUMN ronda_items.confirmados IS 'Índices de la lista de verificación confirmados; un OK exige todos';
 CREATE INDEX IF NOT EXISTS idx_ronda_items_activo ON ronda_items (activo_id, verificado_en DESC);
 
 -- -----------------------------------------------------------------------------

@@ -100,7 +100,6 @@ export const api = {
   analytics: () => request('/analitica'),
 
   // mapas de calor, aislamiento, rondas y bitácora
-  dataCenterMap: () => request('/mapas/centro-datos'),
   pipelineMap: () => request('/mapas/oleoducto'),
   asset: (id) => request(`/activos/${id}`),
   isolateAsset: (id, motivo) => request(`/activos/${id}/aislar`, { method: 'POST', body: { motivo } }),

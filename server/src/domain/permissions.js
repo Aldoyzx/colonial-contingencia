@@ -39,14 +39,14 @@ export function assertCanChangeService(user, service) {
   }
 }
 
-/** Aislar, liberar y verificar un activo: el coordinador o el rol dueño de su red (TI u OT). */
+/** Aislar, reconectar y verificar un elemento: el coordinador o el rol dueño de su red (TI u OT). */
 export function assertCanOperateAsset(user, asset) {
   const allowed =
     isCoordinator(user) ||
     (user.rol === ROLES.IT_ANALYST && asset.red === 'TI') ||
     (user.rol === ROLES.OT_OPERATOR && asset.red === 'OT');
   if (!allowed) {
-    throw new ForbiddenError(`El rol ${user.rol} no puede operar activos de la red ${asset.red}`);
+    throw new ForbiddenError(`El rol ${user.rol} no puede operar elementos de la red ${asset.red}`);
   }
 }
 

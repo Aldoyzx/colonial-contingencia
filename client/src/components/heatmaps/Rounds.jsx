@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api.js';
-import { VERIFICATION_LABELS, canOperateAsset, canStartRound, formatDate } from '../../constants.js';
+import { LINE_LABELS, VERIFICATION_LABELS, canOperateAsset, canStartRound, formatDate } from '../../constants.js';
 import { useAsync } from '../../useAsync.js';
 import { ErrorBanner, Loading } from '../common.jsx';
 
-const SCOPES = { aislados: 'Activos aislados', rack: 'Un rack', servicio: 'Un servicio' };
+const SCOPES = { aislados: 'Elementos aislados', linea: 'Línea', servicio: 'Servicio' };
 
 function NewRoundForm({ user, preset, onCreated }) {
-  const catalog = useAsync(() => Promise.all([api.dataCenterMap(), api.services(), api.incidents('abierto')]), []);
+  const catalog = useAsync(() => Promise.all([api.pipelineMap(), api.services(), api.incidents('abierto')]), []);
   const [alcance, setAlcance] = useState(preset?.alcance ?? 'aislados');
   const [valor, setValor] = useState(preset?.valor ?? '');
   const [incidenteId, setIncidenteId] = useState('');
@@ -17,8 +17,8 @@ function NewRoundForm({ user, preset, onCreated }) {
   if (!canStartRound(user)) return <p className="hint">Solo el coordinador, el analista TI o el operador OT inician rondas.</p>;
   if (!catalog.data) return <Loading />;
   const [map, services, incidents] = catalog.data;
-  const options = alcance === 'rack'
-    ? map.racks.map((r) => ({ value: r.codigo, label: `${r.codigo} · ${r.nombre}` }))
+  const options = alcance === 'linea'
+    ? Object.entries(LINE_LABELS).map(([value, label]) => ({ value, label: `${value} · ${label}` }))
     : services.map((s) => ({ value: s.codigo, label: `${s.codigo} · ${s.nombre}` }));
 
   const submit = async (e) => {
@@ -49,7 +49,7 @@ function NewRoundForm({ user, preset, onCreated }) {
         </select>
       </label>
       {alcance !== 'aislados' && (
-        <label className="field"><span>{alcance === 'rack' ? 'Rack' : 'Servicio'}</span>
+        <label className="field"><span>{alcance === 'linea' ? 'Línea' : 'Servicio'}</span>
           <select value={valor} onChange={(e) => setValor(e.target.value)} required>
             <option value="">Selecciona…</option>
             {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -69,18 +69,22 @@ function NewRoundForm({ user, preset, onCreated }) {
 
 function CheckRow({ item, round, user, onSaved }) {
   const [resultado, setResultado] = useState(item.resultado ?? '');
+  const [confirmed, setConfirmed] = useState(item.confirmados ?? []);
   const [nota, setNota] = useState(item.nota ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const editable = !round.cerrada_en && canOperateAsset(user, item);
+  const allConfirmed = confirmed.length === item.checklist.length;
   const needsNote = resultado && resultado !== 'ok';
 
+  const toggle = (index) => setConfirmed((prev) => (prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index].sort((a, b) => a - b)));
+
   const save = async (value = resultado) => {
-    if (!value || (value !== 'ok' && nota.trim().length < 5)) return;
+    if (!value || (value === 'ok' && !allConfirmed) || (value !== 'ok' && nota.trim().length < 5)) return;
     setBusy(true);
     setError(null);
     try {
-      await onSaved(item.activo_id, { resultado: value, ...(value !== 'ok' ? { nota: nota.trim() } : {}) });
+      await onSaved(item.activo_id, { resultado: value, confirmados: confirmed, ...(value !== 'ok' ? { nota: nota.trim() } : {}) });
     } catch (err) {
       setError(err);
     } finally {
@@ -95,16 +99,33 @@ function CheckRow({ item, round, user, onSaved }) {
 
   return (
     <tr className={item.resultado ? `check check--${item.resultado}` : 'check'}>
-      <td><b className="mono">{item.codigo}</b><div className="small muted">{item.nombre}</div></td>
-      <td className="small">Rack {item.rack} · U{item.u_inicio}<div className="muted">{item.red}{item.servicio_codigo ? ` · ${item.servicio_codigo}` : ''}{item.aislado ? ' · ⛔ aislado' : ''}</div></td>
+      <td>
+        <b className="mono">{item.codigo}</b><div className="small muted">{item.nombre}</div>
+        <div className="small muted">{item.tipo === 'tramo' ? '' : `Sistema ${item.red} · `}{item.servicio_codigo}{item.aislado ? ' · ⛔ aislado' : ''}</div>
+      </td>
+      <td>
+        <ul className="check__points">
+          {item.checklist.map((point, index) => (
+            <li key={point.texto}>
+              <label>
+                <input type="checkbox" checked={confirmed.includes(index)} disabled={!editable || busy} onChange={() => toggle(index)} />
+                <span>{point.texto}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </td>
       <td>
         <div className="check__buttons" role="group" aria-label={`Resultado de ${item.codigo}`}>
           {Object.entries(VERIFICATION_LABELS).map(([value, label]) => (
-            <button key={value} type="button" disabled={!editable || busy} aria-pressed={resultado === value}
+            <button key={value} type="button" aria-pressed={resultado === value}
+              disabled={!editable || busy || (value === 'ok' && !allConfirmed)}
+              title={value === 'ok' && !allConfirmed ? 'Confirma todos los puntos para marcar OK' : undefined}
               className={`btn btn--sm check__btn check__btn--${value}${resultado === value ? ' is-on' : ''}`}
               onClick={() => choose(value)}>{label}</button>
           ))}
         </div>
+        {editable && !allConfirmed && <div className="small muted">{confirmed.length}/{item.checklist.length} puntos confirmados</div>}
         {needsNote && editable && (
           <div className="check__note">
             <input value={nota} onChange={(e) => setNota(e.target.value)} maxLength={500} placeholder="Qué se observó (mín. 5 caracteres)" />
@@ -128,7 +149,6 @@ function RoundDetail({ id, user, onChanged }) {
 
   const pending = round.total - round.verificados;
   const canClose = !round.cerrada_en && (user.rol === 'coordinador' || user.id === round.iniciada_por);
-  const reds = [...new Set(round.items.map((i) => i.red))];
 
   const saveCheck = async (assetId, data) => {
     setData(await api.recordCheck(round.id, assetId, data));
@@ -158,18 +178,11 @@ function RoundDetail({ id, user, onChanged }) {
         <span className={`badge ${round.cerrada_en ? 'badge--operativo' : 'badge--en_recuperacion'}`}>{round.cerrada_en ? 'Cerrada' : `${pending} pendiente(s)`}</span>
       </header>
 
-      <div className="checklist-guide">
-        {reds.map((red) => (
-          <div key={red}>
-            <b>Qué revisar en {red}</b>
-            <ul>{round.checklist[red].map((c) => <li key={c}>{c}</li>)}</ul>
-          </div>
-        ))}
-      </div>
+      <p className="small muted">Cada punto de la lista sale de lo que hizo Colonial al reiniciar o de la alerta de CISA y la directiva de la TSA; sus fuentes están en el detalle del elemento y en la pestaña Fuentes. Un OK exige confirmarlos todos.</p>
 
       <div className="table-wrap">
         <table className="table round-table">
-          <thead><tr><th>Activo</th><th>Ubicación</th><th>Resultado</th><th>Verificó</th></tr></thead>
+          <thead><tr><th>Elemento</th><th>Lista de verificación</th><th>Resultado</th><th>Verificó</th></tr></thead>
           <tbody>
             {round.items.map((item) => (
               <CheckRow key={`${item.activo_id}-${item.verificado_en ?? ''}`} item={item} round={round} user={user} onSaved={saveCheck} />
@@ -181,7 +194,7 @@ function RoundDetail({ id, user, onChanged }) {
       <ErrorBanner error={actionError} onDismiss={() => setActionError(null)} />
       {!round.cerrada_en && (
         <div className="form__actions">
-          {pending > 0 && <span className="hint">Verifica todos los activos para cerrar la ronda.</span>}
+          {pending > 0 && <span className="hint">Verifica todos los elementos para cerrar la ronda.</span>}
           <button type="button" className="btn btn--primary" disabled={!canClose || pending > 0} onClick={close}>Cerrar ronda</button>
         </div>
       )}
@@ -234,9 +247,10 @@ export default function Rounds({ user, request, onRequestHandled }) {
           <div className="panel">
             <h3>¿Para qué sirven las rondas?</h3>
             <p className="muted" style={{ marginTop: 6 }}>
-              Como la revisión diaria de ubicaciones del rack: antes de reconectar un activo aislado, alguien de su red
-              lo revisa con una lista fija y deja el resultado firmado en la bitácora. Sin un OK posterior al aislamiento,
-              el sistema no permite reconectarlo.
+              Adaptan la revisión de ubicaciones de Rack a lo que hizo Colonial: antes de reiniciar un tramo aislado,
+              el personal recorrió la línea y reportó lecturas en sitio. Aquí, alguien de su red confirma cada punto de una
+              lista con fuente y el resultado queda firmado en la bitácora. Sin un OK posterior al aislamiento, el tramo o
+              sistema no se puede reiniciar.
             </p>
           </div>
         )}

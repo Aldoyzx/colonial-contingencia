@@ -63,10 +63,10 @@ export const EVENT_LABELS = {
   incidente_cerrado: 'Incidente cerrado',
   evidencia_registrada: 'Evidencia registrada',
   evidencia_anulada: 'Evidencia anulada',
-  activo_aislado: 'Activo aislado',
-  activo_liberado: 'Activo reconectado',
+  activo_aislado: 'Elemento aislado',
+  activo_liberado: 'Elemento reconectado',
   ronda_iniciada: 'Ronda de verificación iniciada',
-  verificacion_activo: 'Activo verificado',
+  verificacion_activo: 'Elemento verificado',
   ronda_cerrada: 'Ronda de verificación cerrada',
 };
 
@@ -78,19 +78,27 @@ export function canOperateAsset(user, asset) {
 
 export const canStartRound = (user) => ['coordinador', 'analista_ti', 'operador_ot'].includes(user?.rol);
 
-export const HEAT_LABELS = ['Sin riesgo', 'Muy bajo', 'Bajo', 'Medio', 'Alto', 'Crítico'];
-
 export const VERIFICATION_LABELS = { ok: 'OK', observado: 'Observado', falla: 'Falla' };
 
 export const LOCATION_TYPE_LABELS = {
-  centro_control: 'Centro de control',
-  centro_datos: 'Centro de datos',
-  estacion_bombeo: 'Estación de bombeo',
+  origen: 'Origen del sistema',
+  punto_entrega: 'Mercado de entrega',
   patio_tanques: 'Patio de tanques',
-  terminal: 'Terminal',
+  estacion: 'Estación de bombeo',
+  derivacion: 'Derivación de ramales',
+  terminal: 'Fin del sistema',
 };
 
-export const formatPercent = (value) => `${Math.round((value ?? 0) * 100)}%`;
+export const ELEMENT_STATE_LABELS = {
+  operativo: 'Fluye con normalidad',
+  en_recuperacion: 'En recuperación',
+  afectado: 'Servicio afectado',
+  aislado: 'Aislado',
+};
+
+export const LINE_LABELS = { L1: 'Línea 1', L2: 'Línea 2', L3: 'Línea 3', L4: 'Línea 4', LAT: 'Ramales' };
+
+export const formatBarrels = (bpd) => (bpd ? `${(bpd / 1_000_000).toLocaleString('es-PE', { maximumFractionDigits: 2 })} M barriles/día` : 'Sin dato público');
 
 export function canChangeService(user, service) {
   if (!user) return false;
