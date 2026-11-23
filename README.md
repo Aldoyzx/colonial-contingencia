@@ -17,6 +17,9 @@ proyecto [Rack · Operación](https://github.com/Aldoyzx/rack-operacion)). Está
 | Nube | Render (Blueprint `render.yaml`) · guía en [DESPLIEGUE.md](DESPLIEGUE.md) |
 | Calidad | 73 pruebas automatizadas (`node:test`) · GitHub Actions |
 
+
+> **Entregables de la actividad** (ficha, diagrama, presentación, guion, Figma): ver [`entrega/`](entrega/README.md).
+
 ## Módulos
 
 | Módulo | Qué hace |
