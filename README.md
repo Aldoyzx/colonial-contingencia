@@ -3,8 +3,9 @@
 Sistema web para gestionar la respuesta a un ataque de ransomware sobre infraestructura
 crítica. Convierte el plan de contingencia en una máquina de estados (etapas, decisiones
 D1–D4, ruta alternativa y reintento) y lo acompaña con un panel de servicios,
-**evidencias multimedia con cadena de custodia**, **seguridad con MFA** y **analítica de la
-respuesta**. Está listo para desplegarse en la nube (Render).
+**evidencias multimedia con cadena de custodia**, **seguridad con MFA**, **analítica de la
+respuesta** y **mapas de calor** del centro de datos y del oleoducto (funciones traídas del
+proyecto [Rack · Operación](https://github.com/Aldoyzx/rack-operacion)). Está listo para desplegarse en la nube (Render).
 
 | Capa | Tecnología |
 |---|---|
@@ -14,7 +15,7 @@ respuesta**. Está listo para desplegarse en la nube (Render).
 | Base de datos | PostgreSQL 16 (driver `pg`) |
 | Seguridad | scrypt, sesión firmada HS256 en cookie httpOnly, TOTP (RFC 6238), AES-256-GCM |
 | Nube | Render (Blueprint `render.yaml`) · guía en [DESPLIEGUE.md](DESPLIEGUE.md) |
-| Calidad | 56 pruebas automatizadas (`node:test`) · GitHub Actions |
+| Calidad | 74 pruebas automatizadas (`node:test`) · GitHub Actions |
 
 ## Módulos
 
@@ -22,6 +23,10 @@ respuesta**. Está listo para desplegarse en la nube (Render).
 |---|---|
 | Acceso | Contraseña + código MFA, bloqueo tras 5 intentos, límite por IP |
 | Panel | Estado de los 10 servicios TI/OT, incidentes abiertos y eventos (se actualiza cada 10 s) |
+| Mapa de calor | Racks del centro de datos y de control (38 activos con plataformas reales de referencia) en la escala de calor de Rack; capas de riesgo, estado y verificación; mapa de la red Houston → Linden con sus instalaciones reales |
+| Aislamiento | Al caer un servicio, sus activos en rojo (riesgo ≥ 80 %) se aíslan solos; aislamiento manual por rol; no se reconecta sin una verificación OK posterior |
+| Rondas | Revisión por activo con lista fija (TI u OT), resultado OK / observado / falla y cierre solo con todo verificado |
+| Bitácora | Historial encadenado con SHA-256 y verificación de integridad recalculada fuera de la base |
 | Incidentes | Registro (real o simulacro), flujo D1–D4, acciones por responsable, bitácora |
 | Evidencias | Carga con arrastrar y soltar, visor (imagen, PDF, video, audio, registros), huella SHA-256, verificación de integridad, anulación con motivo y biblioteca |
 | Plan | Procedimiento, responsable y recursos tecnológicos de cada etapa |
@@ -51,7 +56,7 @@ Cuentas de demostración (contraseña `Colonial2021!`; cámbienla en "Mi cuenta"
 
 | Comando (en `server/`) | Qué hace |
 |---|---|
-| `npm test` | 56 pruebas contra la base `contingencia_test` |
+| `npm test` | 74 pruebas contra la base `contingencia_test` |
 | `npm run db:demo` | Recrea la base con datos iniciales e incidentes históricos (2021–2026) |
 | `npm run db:reset` | Recrea la base solo con los datos iniciales |
 | `npm run simulacro` | Ejecuta un simulacro completo y escribe el informe en `docs/evidencias/` |
@@ -83,6 +88,7 @@ Cuentas de demostración (contraseña `Colonial2021!`; cámbienla en "Mi cuenta"
 | `03_verificacion.sql` | Consultas de verificación de la estructura |
 | `04_datos_prueba.sql` | 7 incidentes históricos (2021–2026), incluidos 2 simulacros |
 | `05_…` · `06_migracion_entrega_final.sql` | Migraciones para bases creadas con versiones anteriores (se aplican solas) |
+| `07_migracion_mapas.sql` | Ubicaciones, activos por rack, rondas de verificación y bitácora encadenada (se aplica en cada arranque; encadena los eventos existentes) |
 
 Diagrama entidad-relación: `docs/der/DER.png`.
 
@@ -95,7 +101,11 @@ Diagrama entidad-relación: `docs/der/DER.png`.
 - **CSRF:** cookie `SameSite=Strict` y cabecera `X-Requested-With` obligatoria en las modificaciones.
 - **Autorización por rol** en el servidor (decisiones, acciones, servicios TI/OT, evidencias y bitácora de seguridad).
 - **Archivos:** tipo validado por su firma binaria (no por la extensión), sin SVG ni HTML, `nosniff`, CSP `sandbox` y descarga con nombre saneado.
-- **Auditoría:** `historial_recuperacion` y `eventos_seguridad` son de solo inserción (triggers).
+- **Auditoría:** `historial_recuperacion` y `eventos_seguridad` son de solo inserción (triggers). Además, cada evento del historial guarda la huella SHA-256 del anterior (ISO/IEC 27001 A.8.15): cambiar o borrar uno, incluso desde la base, rompe la cadena y `GET /api/bitacora/verificar` indica dónde.
+
+### Datos de referencia
+
+Las instalaciones de la red (Pasadena, Lake Charles, Baton Rouge, Collins, Atlanta, Charlotte, Greensboro, Richmond, Dorsey Junction, Linden y el centro de control de Alpharetta) provienen de fuentes públicas; las distancias son aproximadas. Las plataformas de los activos (Active Directory, SAP, VMware, Veeam, AVEVA PI…) son productos típicos del sector usados como referencia: el inventario real de Colonial no es público.
 - helmet (CSP, HSTS, X-Frame-Options), consultas parametrizadas y validación con zod en cada entrada.
 
 ## API (resumen)
@@ -106,6 +116,9 @@ Diagrama entidad-relación: `docs/der/DER.png`.
 | Operación | `GET /api/dashboard`, `/servicios`, `/plan`, `/incidentes[/:id]` · `POST /incidentes`, `/:id/avanzar`, `/:id/decisiones`, `/:id/acciones` · `PATCH /acciones/:id`, `/servicios/:id/estado` |
 | Evidencias | `GET/POST /api/incidentes/:id/evidencias` · `GET /evidencias`, `/evidencias/:id/contenido`, `/evidencias/:id/verificar` · `POST /evidencias/:id/anular` |
 | Analítica | `GET /api/analitica`, `/analitica/incidentes.csv`, `/seguridad/eventos` (coordinador) |
+| Mapas y activos | `GET /api/mapas/centro-datos`, `/mapas/oleoducto`, `/activos/:id` · `POST /activos/:id/aislar`, `/activos/:id/liberar` |
+| Rondas | `GET/POST /api/rondas` · `GET /rondas/:id` · `PATCH /rondas/:id/activos/:activoId` · `POST /rondas/:id/cerrar` |
+| Bitácora | `GET /api/bitacora`, `/bitacora/verificar` |
 | Salud | `GET /api/health` (base de datos y almacenamiento) |
 
 Errores: `{ error: { code, message, details? } }` con 400, 401, 403, 404, 409, 413 y 429.

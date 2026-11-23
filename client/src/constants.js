@@ -63,7 +63,34 @@ export const EVENT_LABELS = {
   incidente_cerrado: 'Incidente cerrado',
   evidencia_registrada: 'Evidencia registrada',
   evidencia_anulada: 'Evidencia anulada',
+  activo_aislado: 'Activo aislado',
+  activo_liberado: 'Activo reconectado',
+  ronda_iniciada: 'Ronda de verificación iniciada',
+  verificacion_activo: 'Activo verificado',
+  ronda_cerrada: 'Ronda de verificación cerrada',
 };
+
+/** Mismos criterios que el servidor (domain/permissions.js): coordinador o el rol dueño de la red. */
+export function canOperateAsset(user, asset) {
+  if (!user || !asset) return false;
+  return user.rol === 'coordinador' || (user.rol === 'analista_ti' && asset.red === 'TI') || (user.rol === 'operador_ot' && asset.red === 'OT');
+}
+
+export const canStartRound = (user) => ['coordinador', 'analista_ti', 'operador_ot'].includes(user?.rol);
+
+export const HEAT_LABELS = ['Sin riesgo', 'Muy bajo', 'Bajo', 'Medio', 'Alto', 'Crítico'];
+
+export const VERIFICATION_LABELS = { ok: 'OK', observado: 'Observado', falla: 'Falla' };
+
+export const LOCATION_TYPE_LABELS = {
+  centro_control: 'Centro de control',
+  centro_datos: 'Centro de datos',
+  estacion_bombeo: 'Estación de bombeo',
+  patio_tanques: 'Patio de tanques',
+  terminal: 'Terminal',
+};
+
+export const formatPercent = (value) => `${Math.round((value ?? 0) * 100)}%`;
 
 export function canChangeService(user, service) {
   if (!user) return false;

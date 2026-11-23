@@ -8,7 +8,7 @@ import { writeFileSync } from 'node:fs';
 import { DATABASE_DIR } from '../src/db/files.js';
 import { DECISIONS, STAGES } from '../src/domain/flow.js';
 import { RESOURCES } from '../src/domain/resources.js';
-import { DEMO_PASSWORD, SERVICES, USERS } from '../src/db/seedData.js';
+import { ASSETS, DEMO_PASSWORD, LOCATIONS, SERVICES, USERS } from '../src/db/seedData.js';
 import { hashPassword } from '../src/security/password.js';
 
 const literal = (value) => {
@@ -39,7 +39,7 @@ const stageResourceRows = Object.entries(STAGES).flatMap(([clave, s]) =>
 
 const sql = `-- =============================================================================
 --  Centro de Contingencia — Colonial Pipeline (2021)
---  02 · Datos iniciales: catálogo del plan, recursos, usuarios y servicios
+--  02 · Datos iniciales: catálogo del plan, recursos, usuarios, servicios, ubicaciones y activos
 --  Gestor: PostgreSQL 16 · ARCHIVO GENERADO por server/scripts/generate-seed-sql.js
 --
 --  Es idempotente: puede ejecutarse varias veces sin duplicar registros.
@@ -89,6 +89,34 @@ ON CONFLICT (email) DO UPDATE SET clave_hash = COALESCE(usuarios.clave_hash, EXC
 INSERT INTO servicios (codigo, nombre, tipo, criticidad, descripcion) VALUES
 ${valuesBlock(SERVICES.map((s) => [s.codigo, s.nombre, s.tipo, s.criticidad, s.descripcion]))}
 ON CONFLICT (codigo) DO NOTHING;
+
+-- Instalaciones de la red (distancias aproximadas, con fines académicos)
+INSERT INTO ubicaciones (codigo, nombre, tipo, ciudad, estado_eeuu, km_aprox, servicio_id, descripcion)
+SELECT v.codigo, v.nombre, v.tipo::tipo_ubicacion, v.ciudad, v.estado, v.km::SMALLINT, s.id, v.descripcion
+  FROM (VALUES
+${valuesBlock(LOCATIONS.map((l) => [l.codigo, l.nombre, l.tipo, l.ciudad, l.estado, l.km, l.servicio, l.descripcion]))}
+  ) AS v (codigo, nombre, tipo, ciudad, estado, km, servicio, descripcion)
+  LEFT JOIN servicios s ON s.codigo = v.servicio
+ON CONFLICT (codigo) DO UPDATE SET
+  nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, ciudad = EXCLUDED.ciudad, estado_eeuu = EXCLUDED.estado_eeuu,
+  km_aprox = EXCLUDED.km_aprox, servicio_id = EXCLUDED.servicio_id, descripcion = EXCLUDED.descripcion;
+
+-- Activos por rack (plataformas de referencia). El estado de aislamiento no se toca al resincronizar.
+INSERT INTO activos (codigo, nombre, plataforma, funcion, red, servicio_id, ubicacion_id, rack, u_inicio, u_alto, criticidad,
+                     expuesto_internet, sin_mfa, sin_soporte, privilegiado)
+SELECT v.codigo, v.nombre, v.plataforma, v.funcion, v.red::tipo_servicio, s.id, u.id, v.rack, v.u::SMALLINT, v.alto::SMALLINT,
+       v.criticidad::SMALLINT, v.expuesto, v.sin_mfa, v.sin_soporte, v.privilegiado
+  FROM (VALUES
+${valuesBlock(ASSETS.map((a) => [a.codigo, a.nombre, a.plataforma, a.funcion, a.red, a.servicio, a.ubicacion, a.rack, a.u, a.alto, a.criticidad, a.expuesto, a.sinMfa, a.sinSoporte, a.privilegiado]))}
+  ) AS v (codigo, nombre, plataforma, funcion, red, servicio, ubicacion, rack, u, alto, criticidad, expuesto, sin_mfa, sin_soporte, privilegiado)
+  JOIN ubicaciones u ON u.codigo = v.ubicacion
+  LEFT JOIN servicios s ON s.codigo = v.servicio
+ON CONFLICT (codigo) DO UPDATE SET
+  nombre = EXCLUDED.nombre, plataforma = EXCLUDED.plataforma, funcion = EXCLUDED.funcion, red = EXCLUDED.red,
+  servicio_id = EXCLUDED.servicio_id, ubicacion_id = EXCLUDED.ubicacion_id, rack = EXCLUDED.rack,
+  u_inicio = EXCLUDED.u_inicio, u_alto = EXCLUDED.u_alto, criticidad = EXCLUDED.criticidad,
+  expuesto_internet = EXCLUDED.expuesto_internet, sin_mfa = EXCLUDED.sin_mfa,
+  sin_soporte = EXCLUDED.sin_soporte, privilegiado = EXCLUDED.privilegiado;
 
 COMMIT;
 `;
